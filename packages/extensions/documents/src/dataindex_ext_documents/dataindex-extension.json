@@ -1,0 +1,18 @@
+{
+  "plugin_id": "documents",
+  "distribution": "dataindex-ext-documents",
+  "plugin_version": "0.1.0",
+  "core_api_range": ">=0.1,<0.2",
+  "edition": "free",
+  "license_mode": "none",
+  "capabilities": [
+    "document.index",
+    "document.retrieve"
+  ],
+  "source_types": [
+    "text/markdown",
+    "text/plain",
+    "text/html"
+  ],
+  "publisher": "DataIndex project"
+}

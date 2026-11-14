@@ -1,0 +1,18 @@
+{
+  "plugin_id": "premium-demo",
+  "distribution": "dataindex-ext-mock-premium",
+  "plugin_version": "0.1.0",
+  "core_api_range": ">=0.1,<0.2",
+  "edition": "commercial",
+  "license_mode": "entitlement",
+  "capabilities": [
+    "premium.demo.read"
+  ],
+  "capability_entitlements": {
+    "premium.demo.read": "premium.demo.read"
+  },
+  "source_types": [
+    "application/vnd.dataindex.mock-premium"
+  ],
+  "publisher": "DataIndex synthetic test fixture"
+}

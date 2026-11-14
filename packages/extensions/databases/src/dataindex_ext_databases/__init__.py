@@ -1,0 +1,55 @@
+"""Free SQLite schema and bounded-query extension for DataIndex."""
+
+from dataindex_ext_databases.exceptions import (
+    ClosedDatabaseIndexError,
+    DatabaseDeadlineExceededError,
+    DatabaseExecutionBudgetExceededError,
+    DatabaseIndexError,
+    DatabaseNotRegisteredError,
+    DatabaseQueryError,
+    DatabaseRegistrationError,
+    DatabaseResultError,
+    DatabaseResultTooLargeError,
+    DatabaseSourceChangedError,
+    DatabaseSchemaChangedError,
+    DatabaseSourceConflictError,
+    InvalidDatabaseConfigurationError,
+    InvalidDatabaseToolRequestError,
+    UnauthorizedDatabaseAccessError,
+    UnsupportedDatabaseSourceError,
+)
+from dataindex_ext_databases.plugin import SQLiteDatabaseExtension
+from dataindex_ext_databases.queries import (
+    AggregateRule,
+    ColumnRef,
+    FixedFilterRule,
+    FilterRule,
+    JoinRule,
+    QueryDefinition,
+)
+
+__all__ = [
+    "AggregateRule",
+    "ClosedDatabaseIndexError",
+    "ColumnRef",
+    "DatabaseDeadlineExceededError",
+    "DatabaseExecutionBudgetExceededError",
+    "DatabaseIndexError",
+    "DatabaseNotRegisteredError",
+    "DatabaseQueryError",
+    "DatabaseRegistrationError",
+    "DatabaseResultError",
+    "DatabaseResultTooLargeError",
+    "DatabaseSourceChangedError",
+    "DatabaseSchemaChangedError",
+    "DatabaseSourceConflictError",
+    "FixedFilterRule",
+    "FilterRule",
+    "InvalidDatabaseConfigurationError",
+    "InvalidDatabaseToolRequestError",
+    "JoinRule",
+    "QueryDefinition",
+    "SQLiteDatabaseExtension",
+    "UnauthorizedDatabaseAccessError",
+    "UnsupportedDatabaseSourceError",
+]

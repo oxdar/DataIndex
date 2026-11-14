@@ -1,0 +1,107 @@
+{
+  "allowed_columns": {
+    "contracts": [
+      "contract_id",
+      "contract_name",
+      "currency",
+      "tenant_id"
+    ],
+    "invoices": [
+      "invoice_id",
+      "contract_id",
+      "amount_cents",
+      "due_date",
+      "paid",
+      "tenant_id",
+      "reference"
+    ]
+  },
+  "queries": [
+    {
+      "query_id": "invoices.overdue_total_by_contract",
+      "table": "invoices",
+      "columns": [
+        {
+          "table": "contracts",
+          "column": "contract_id"
+        },
+        {
+          "table": "contracts",
+          "column": "contract_name"
+        }
+      ],
+      "filters": [
+        {
+          "name": "due_before",
+          "column": {
+            "table": "invoices",
+            "column": "due_date"
+          },
+          "operator": "lte"
+        },
+        {
+          "name": "is_paid",
+          "column": {
+            "table": "invoices",
+            "column": "paid"
+          },
+          "operator": "eq"
+        }
+      ],
+      "source_filters": [
+        {
+          "name": "invoice_tenant",
+          "column": {
+            "table": "invoices",
+            "column": "tenant_id"
+          },
+          "operator": "eq",
+          "value": "tenant-a"
+        },
+        {
+          "name": "contract_tenant",
+          "column": {
+            "table": "contracts",
+            "column": "tenant_id"
+          },
+          "operator": "eq",
+          "value": "tenant-a"
+        }
+      ],
+      "joins": [
+        {
+          "left": {
+            "table": "invoices",
+            "column": "contract_id"
+          },
+          "right": {
+            "table": "contracts",
+            "column": "contract_id"
+          },
+          "kind": "inner"
+        }
+      ],
+      "aggregate": {
+        "function": "sum",
+        "column": {
+          "table": "invoices",
+          "column": "amount_cents"
+        },
+        "alias": "overdue_total_cents"
+      },
+      "group_by": [
+        {
+          "table": "contracts",
+          "column": "contract_id"
+        },
+        {
+          "table": "contracts",
+          "column": "contract_name"
+        }
+      ],
+      "order_by": [],
+      "max_rows": 25,
+      "unit": "USD cents"
+    }
+  ]
+}

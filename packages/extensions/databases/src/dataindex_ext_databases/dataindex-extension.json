@@ -1,0 +1,17 @@
+{
+  "plugin_id": "databases",
+  "distribution": "dataindex-ext-databases",
+  "plugin_version": "0.1.0",
+  "core_api_range": ">=0.1,<0.2",
+  "edition": "free",
+  "license_mode": "none",
+  "capabilities": [
+    "database.index",
+    "database.query"
+  ],
+  "source_types": [
+    "application/vnd.sqlite3",
+    "application/x-sqlite3"
+  ],
+  "publisher": "DataIndex project"
+}

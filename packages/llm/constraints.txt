@@ -1,0 +1,8 @@
+# Runtime dependencies are bounded in pyproject.toml:
+# dataindex-core>=0.1,<0.2
+# The built-in OpenAI-compatible backend uses only the Python standard library.
+#
+# The optional "litellm" extra is pinned conservatively to the range that
+# PageIndex also uses; its pyproject notes that LiteLLM 1.107.0 was malware.
+# Widen the range only after reviewing the new release:
+# litellm>=1.105.1,<1.106

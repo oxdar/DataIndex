@@ -1,0 +1,3 @@
+# Runtime dependencies are bounded in pyproject.toml:
+# dataindex-core>=0.1,<0.2
+# SQLite access uses Python's standard-library sqlite3 module.

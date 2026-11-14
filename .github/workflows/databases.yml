@@ -1,0 +1,68 @@
+name: Databases
+
+on:
+  push:
+    paths:
+      - "packages/core/**"
+      - "packages/extensions/documents/**"
+      - "packages/extensions/databases/**"
+      - "packages/llm/**"
+      - "examples/mixed_sources.py"
+      - "examples/contracts_database_config.json"
+      - "tests/integration/**"
+      - "README.md"
+      - "docs/EXTENSION_CONTRACT.md"
+      - "docs/SECURITY_AND_ENTITLEMENTS.md"
+      - "docs/PHASE_STATUS.md"
+      - ".github/workflows/databases.yml"
+  pull_request:
+    paths:
+      - "packages/core/**"
+      - "packages/extensions/documents/**"
+      - "packages/extensions/databases/**"
+      - "packages/llm/**"
+      - "examples/mixed_sources.py"
+      - "examples/contracts_database_config.json"
+      - "tests/integration/**"
+      - "README.md"
+      - "docs/EXTENSION_CONTRACT.md"
+      - "docs/SECURITY_AND_ENTITLEMENTS.md"
+      - "docs/PHASE_STATUS.md"
+      - ".github/workflows/databases.yml"
+  workflow_dispatch:
+
+jobs:
+  database-extension:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir dist/core packages/core
+      - run: python -m build --wheel --outdir dist/documents packages/extensions/documents
+      - run: python -m build --wheel --outdir dist/databases packages/extensions/databases
+      - run: python -m build --wheel --outdir dist/llm packages/llm
+      - run: python -m venv .venv-databases
+      - run: .venv-databases/bin/python -m pip install pytest dist/core/*.whl dist/documents/*.whl dist/databases/*.whl dist/llm/*.whl
+      - run: .venv-databases/bin/python -m pip check
+      - run: .venv-databases/bin/python -m pytest packages/extensions/databases/tests -q
+      - run: .venv-databases/bin/python packages/extensions/databases/examples/basic_usage.py
+      - run: .venv-databases/bin/python -m pytest packages/extensions/documents/tests -q
+      - run: .venv-databases/bin/python packages/extensions/documents/examples/basic_usage.py
+      - run: .venv-databases/bin/python -m pytest tests/integration -q
+      - run: .venv-databases/bin/python examples/mixed_sources.py
+      - run: .venv-databases/bin/python -m pip uninstall -y dataindex-ext-databases
+      - run: .venv-databases/bin/python -m pip check
+      - run: .venv-databases/bin/python -m pytest packages/extensions/documents/tests -q
+      - run: .venv-databases/bin/python packages/extensions/documents/examples/basic_usage.py
+      - run: .venv-databases/bin/python -m pip uninstall -y dataindex-ext-documents dataindex-llm
+      - run: .venv-databases/bin/python -m pip check
+      - run: .venv-databases/bin/python -m pytest packages/core/tests -q
+      - run: .venv-databases/bin/python -c "import dataindex; print(dataindex.__version__)"
+      - run: .venv-databases/bin/python -m dataindex extensions list

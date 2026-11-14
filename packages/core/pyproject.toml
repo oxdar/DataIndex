@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataindex-core"
+version = "0.1.0"
+description = "Vectorless reasoning retrieval core with a typed extension contract"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "packaging>=23.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "build>=1.2",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+dataindex = "dataindex.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dataindex = ["THIRD_PARTY_NOTICES.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

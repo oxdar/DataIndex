@@ -1,0 +1,59 @@
+name: LLM adapter
+
+on:
+  push:
+    paths:
+      - "packages/core/**"
+      - "packages/llm/**"
+      - ".github/workflows/llm.yml"
+  pull_request:
+    paths:
+      - "packages/core/**"
+      - "packages/llm/**"
+      - ".github/workflows/llm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  llm-adapter:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir dist/core packages/core
+      - run: python -m build --wheel --outdir dist/llm packages/llm
+      - run: python -m venv .venv-llm
+      - run: .venv-llm/bin/python -m pip install pytest
+      - run: >-
+          .venv-llm/bin/python -m pip install --no-index
+          --find-links dist/core --find-links dist/llm
+          dataindex-core dataindex-llm
+      - run: .venv-llm/bin/python -m pip check
+      - run: .venv-llm/bin/python -m pytest packages/llm/tests -q
+      - run: .venv-llm/bin/python -c "import dataindex_llm; print(dataindex_llm.__version__)"
+      - run: .venv-llm/bin/python -c "import importlib.util as u; assert u.find_spec('litellm') is None"
+      - run: .venv-llm/bin/python -m pip uninstall -y dataindex-llm
+      - run: .venv-llm/bin/python -m pip check
+      - run: .venv-llm/bin/python -c "import dataindex; print(dataindex.__version__)"
+      - run: |
+          .venv-llm/bin/python - <<'PY'
+          from dataindex.exceptions import ChatModelConfigurationError
+          from dataindex.llm import resolve_chat_model
+
+          try:
+              resolve_chat_model("gpt-4o")
+          except ChatModelConfigurationError as error:
+              assert "pip install dataindex-llm" in str(error), str(error)
+              print(error)
+          else:
+              raise SystemExit("expected a ChatModelConfigurationError")
+          PY

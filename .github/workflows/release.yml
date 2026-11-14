@@ -1,0 +1,123 @@
+name: Release candidate validation
+
+on:
+  push:
+    paths:
+      - "packages/**"
+      - "tests/**"
+      - "examples/**"
+      - "docs/**"
+      - "**.md"
+      - ".github/copilot-instructions.md"
+      - ".github/instructions/**"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "tests/**"
+      - "examples/**"
+      - "docs/**"
+      - "**.md"
+      - ".github/copilot-instructions.md"
+      - ".github/instructions/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+jobs:
+  release-candidate:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+            venv-python: .venv-check/bin/python
+          - os: ubuntu-latest
+            python-version: "3.12"
+            venv-python: .venv-check/bin/python
+          - os: ubuntu-latest
+            python-version: "3.13"
+            venv-python: .venv-check/bin/python
+          - os: windows-latest
+            python-version: "3.11"
+            venv-python: .venv-check/Scripts/python.exe
+          - os: windows-latest
+            python-version: "3.12"
+            venv-python: .venv-check/Scripts/python.exe
+          - os: windows-latest
+            python-version: "3.13"
+            venv-python: .venv-check/Scripts/python.exe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install build and test tools
+        run: python -m pip install --upgrade build pytest
+      - name: Build every independent wheel and sdist
+        run: |
+          for package in \
+            packages/core \
+            packages/extensions/documents \
+            packages/extensions/databases \
+            packages/llm \
+            tests/plugins/mock_premium
+          do
+            python -m build --wheel --sdist --outdir dist "$package"
+          done
+      - name: Verify core-only wheel
+        run: |
+          python -m venv .venv-check
+          "${{ matrix.venv-python }}" -m pip install pytest "packaging>=23.2"
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist "dataindex-core==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+          "${{ matrix.venv-python }}" -c "import dataindex; print(dataindex.__version__)"
+          "${{ matrix.venv-python }}" -m dataindex extensions list
+      - name: Verify independent extension wheel installs
+        run: |
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist "dataindex-ext-documents==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist "dataindex-ext-databases==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist "dataindex-ext-mock-premium==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+      - name: Verify the independent LLM adapter wheel installs
+        run: |
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist "dataindex-llm==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+          "${{ matrix.venv-python }}" -c "import dataindex_llm; print(dataindex_llm.__version__)"
+      - name: Install all wheels for mixed integration tests
+        run: |
+          "${{ matrix.venv-python }}" -m pip install --no-index --find-links dist \
+            "dataindex-core==0.1.0" \
+            "dataindex-ext-documents==0.1.0" \
+            "dataindex-ext-databases==0.1.0" \
+            "dataindex-llm==0.1.0" \
+            "dataindex-ext-mock-premium==0.1.0"
+          "${{ matrix.venv-python }}" -m pip check
+      - name: Run mixed and extension tests
+        run: |
+          "${{ matrix.venv-python }}" -m pytest \
+            packages/core/tests \
+            packages/extensions/documents/tests \
+            packages/extensions/databases/tests \
+            packages/llm/tests \
+            tests/plugins/mock_premium/tests \
+            tests/integration \
+            -q -p no:cacheprovider \
+            -k "not test_extensions_list_works_without_plugins"
+          "${{ matrix.venv-python }}" examples/mixed_sources.py
+      - name: Verify extension removal and core-only tests
+        run: |
+          "${{ matrix.venv-python }}" -m pip uninstall -y \
+            dataindex-ext-documents \
+            dataindex-ext-databases \
+            dataindex-llm \
+            dataindex-ext-mock-premium
+          "${{ matrix.venv-python }}" -m pip check
+          "${{ matrix.venv-python }}" -m pytest packages/core/tests -q -p no:cacheprovider
+          "${{ matrix.venv-python }}" -m dataindex extensions list

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataindex-llm"
+version = "0.1.0"
+description = "Optional OpenAI-compatible and LiteLLM chat model adapters for DataIndex"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dataindex-core>=0.1,<0.2",
+]
+
+[project.optional-dependencies]
+litellm = [
+    "litellm>=1.105.1,<1.106",
+]
+test = [
+    "build>=1.2",
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,6 @@
+This distribution contains no copied third-party source code. Its built-in
+OpenAI-compatible backend depends only on dataindex-core and the Python
+standard library.
+
+The optional "litellm" extra installs LiteLLM from PyPI under its own license;
+LiteLLM is not bundled with or copied into this distribution.
