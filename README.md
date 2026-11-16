@@ -46,8 +46,7 @@ from Python, from the command line, or in an optional local browser chat.
   model adapter and the UI are separate packages. Parsers and database drivers
   are optional extras.
 - **Extensible.** Free, third-party and premium readers all implement the same
-  typed [extension contract](docs/EXTENSION_CONTRACT.md) and are discovered
-  through Python entry points.
+  typed extension contract and are discovered through Python entry points.
 
 ### Packages
 
@@ -243,8 +242,7 @@ with DataIndexClient(chat="gpt-4o") as client:
 To build your own agent loop, use `as_openai_tools()`, `as_anthropic_tools()`,
 `agent_instructions()` and `call_tool()`. Host applications can call
 `DataIndexClient.open(...)` with explicit authorization and trust policies. The
-[Python API reference](docs/PYTHON_API.md) documents signatures, errors, budgets
-and citation fields.
+[core package guide](packages/core/README.md) describes the public surface.
 
 ## Databases
 
@@ -388,15 +386,11 @@ options.
 
 | Guide | What it covers |
 | --- | --- |
-| [Python API](docs/PYTHON_API.md) | SDK reference: signatures, errors, budgets, citations |
 | [Documents extension](packages/extensions/documents/README.md) | Supported formats, parsers, limits |
 | [Databases extension](packages/extensions/databases/README.md) | Engines, connection URLs, views, query configuration, read-only guards |
 | [Model adapter](packages/llm/README.md) | OpenAI-compatible and LiteLLM backends |
 | [Browser UI](packages/ui/README.md) | Running the UI, storage and deletion |
-| [Core package](packages/core/README.md) | Catalog, plugin runtime and CLI |
-| [System architecture](docs/SYSTEM_ARCHITECTURE.md) | How the packages fit together |
-| [Extension contract](docs/EXTENSION_CONTRACT.md) | Writing a reader plugin |
-| [Security and entitlements](docs/SECURITY_AND_ENTITLEMENTS.md) | Authorization, trust and licensing checks for host applications |
+| [Core package](packages/core/README.md) | Python SDK, catalog, plugin runtime, authorization and CLI |
 | [Changelog](CHANGELOG.md) | Changes in this version |
 
 ## Contributing and support

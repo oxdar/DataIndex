@@ -10,9 +10,6 @@ on:
       - "README.md"
       - "packages/core/README.md"
       - ".github/workflows/commercial.yml"
-      - "docs/EXTENSION_CONTRACT.md"
-      - "docs/SECURITY_AND_ENTITLEMENTS.md"
-      - "docs/REPOSITORY_AND_PACKAGING.md"
   pull_request:
     paths:
       - "packages/core/**"
@@ -22,9 +19,6 @@ on:
       - "README.md"
       - "packages/core/README.md"
       - ".github/workflows/commercial.yml"
-      - "docs/EXTENSION_CONTRACT.md"
-      - "docs/SECURITY_AND_ENTITLEMENTS.md"
-      - "docs/REPOSITORY_AND_PACKAGING.md"
   workflow_dispatch:
 
 jobs:

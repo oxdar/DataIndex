@@ -11,8 +11,6 @@ on:
       - "examples/contracts_database_config.json"
       - "tests/integration/**"
       - "README.md"
-      - "docs/EXTENSION_CONTRACT.md"
-      - "docs/SECURITY_AND_ENTITLEMENTS.md"
       - ".github/workflows/databases.yml"
   pull_request:
     paths:
@@ -24,8 +22,6 @@ on:
       - "examples/contracts_database_config.json"
       - "tests/integration/**"
       - "README.md"
-      - "docs/EXTENSION_CONTRACT.md"
-      - "docs/SECURITY_AND_ENTITLEMENTS.md"
       - ".github/workflows/databases.yml"
   workflow_dispatch:
 

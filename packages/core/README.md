@@ -8,7 +8,7 @@ documents, SQLite and DuckDB files and database server connections, and ask
 cited questions with
 `DataIndexClient("gpt-4o").chat(...)` or `dataindex chat`; it needs the free
 extensions and, for model names, the optional `dataindex-llm` package (see the
-repository README and `docs/PYTHON_API.md`).
+repository README).
 
 Core has no built-in format readers and does not import extension modules during
 discovery. Entry-point code is loaded only when its distribution/version is
@@ -29,10 +29,8 @@ reason codes. Core does not provide a billing service or persistent audit
 storage.
 Tool evidence is checked for source/version/operation provenance and catalog
 locator consistency, but claim-text entailment and re-reading non-catalog
-sources remain application responsibilities. See the repository's
-`docs/EXTENSION_CONTRACT.md` and `docs/SECURITY_AND_ENTITLEMENTS.md` for the
-design contract. `SQLiteCatalog` stores source revisions, typed nodes, evidence
-and graph edges.
+sources remain application responsibilities. `SQLiteCatalog` stores source
+revisions, typed nodes, evidence and graph edges.
 Source content remains authoritative and outside the catalog; evidence is
 accepted only after its native locator is resolved by a caller-provided
 `LocatorDereferencer`. Catalog keyword search and graph traversal are
@@ -57,7 +55,6 @@ argument is only a catalog label, not authentication. Document `index` and
 arbitrary SQL; databases are submitted with approved typed queries
 (`dataindex submit-db PATH --config FILE`, or `--url URL --password-env NAME`
 for a database server; the password itself never appears in a URL or argument).
-See `docs/PYTHON_API.md` in the repository for the full public surface.
 
 The repository's core/free-extension license choice is still pending maintainer
 review, so this initial build does not declare a distribution license.

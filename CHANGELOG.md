@@ -13,7 +13,7 @@ first-implementation candidate; it is not evidence that a package has shipped.
   `index`/`query` commands.
 - Added Python API and CLI security documentation and release-matrix CI for
   separate package wheels and sdists.
-- Added a PageIndex-style local mode (user-requested, see ADR-007):
+- Added a PageIndex-style local mode (user-requested):
   `DataIndexClient(chat=...)` with `submit_document`, `submit_database`,
   `get_document`, `list_documents`, `get_document_id`, `get_tree`,
   `get_section`, `delete_document` and a cited, abstaining `chat`; a local
