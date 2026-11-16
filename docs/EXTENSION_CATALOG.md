@@ -4,8 +4,8 @@ The public core exposes one interface for free and commercial extensions. Price 
 
 | Extension | v0.1 status | Proposed initial tier | First meaningful operation | Typical libraries / concerns |
 |---|---|---|---|---|
-| DocumentIndex | Required to build | FREE | Markdown/TXT/HTML hierarchy, cited retrieval | Standard libraries; PDF later via tested parser |
-| DataBaseIndex | Required to build | FREE | SQLite schema and bounded live SELECT | SQLAlchemy optional, DB-native permissions |
+| DocumentIndex | Required to build | FREE | Tested native-structure readers for text, office, PDF, data, email and e-book formats; cited retrieval | Standard library by default; optional pypdf, olefile and xlrd extras |
+| DataBaseIndex | Required to build | FREE | Schema indexing and bounded approved queries for SQLite and DuckDB files and PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB servers; Snowflake, BigQuery and ClickHouse experimental | Standard library for SQLite; optional SQLAlchemy Core, duckdb, pymongo and per-engine driver extras; DB-native read-only logins |
 | VisualIndex Basic | Future | FREE | Metadata/OCR and region locators | Pillow; OCR dependencies optional |
 | GeometryIndex Basic | Future | FREE | glTF/OBJ nodes and bbox | trimesh; unit accuracy |
 | BIMIndex Pro | Future | PAID | IFC element GUID/properties/containment | IfcOpenShell; legal/packaging review |

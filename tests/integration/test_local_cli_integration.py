@@ -257,7 +257,7 @@ def test_a_sqlite_file_given_to_submit_is_redirected_to_submit_db(
     message = error_line(cli("submit", str(database), expect=2))
 
     assert message == (
-        "'contracts.sqlite' is a SQLite database; submit it with: "
+        "'contracts.sqlite' is a database file; submit it with: "
         "dataindex submit-db PATH --config FILE"
     )
     assert cli("documents", "list", "--json").json()["total"] == 0
@@ -340,7 +340,7 @@ def test_submit_db_refuses_a_missing_configuration_and_a_file_that_is_not_a_data
     message = error_line(cli("submit-db", str(source), "--config", str(config), expect=2))
 
     assert message == (
-        "'terms.md' is not a SQLite database; submit documents with: dataindex submit PATH"
+        "'terms.md' is not a database file; submit documents with: dataindex submit PATH"
     )
     assert cli("documents", "list", "--json").json()["total"] == 0
 

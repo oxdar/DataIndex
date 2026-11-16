@@ -4,7 +4,8 @@ The DataIndex core package. It provides typed source/evidence models, a
 versioned SQLite catalog, bounded hierarchy/graph navigation, a small
 `DataIndexClient` SDK, and a local CLI for extension inspection, source listing,
 document indexing and retrieval. A PageIndex-style local mode lets you submit
-Markdown, text, HTML and SQLite files and ask cited questions with
+documents, SQLite and DuckDB files and database server connections, and ask
+cited questions with
 `DataIndexClient("gpt-4o").chat(...)` or `dataindex chat`; it needs the free
 extensions and, for model names, the optional `dataindex-llm` package (see the
 repository README and `docs/PYTHON_API.md`).
@@ -54,7 +55,8 @@ argument is only a catalog label, not authentication. Document `index` and
 `query` commands require explicit `--trusted-distribution`,
 `--trusted-version`, and `--enable-plugin` arguments. Neither CLI executes
 arbitrary SQL; databases are submitted with approved typed queries
-(`dataindex submit-db --config FILE`).
+(`dataindex submit-db PATH --config FILE`, or `--url URL --password-env NAME`
+for a database server; the password itself never appears in a URL or argument).
 See `docs/PYTHON_API.md` in the repository for the full public surface.
 
 The repository's core/free-extension license choice is still pending maintainer

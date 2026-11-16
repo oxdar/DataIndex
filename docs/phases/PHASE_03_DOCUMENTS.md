@@ -9,7 +9,7 @@ Prerequisite: Phase 02 acceptance gate passed with recorded tests.
 
 ## Exact tasks and deliverables
 - Create `packages/extensions/documents/pyproject.toml` with independent wheel and entry point `documents`.
-- Implement Markdown, TXT and HTML readers with clear format-specific boundaries and locators; optionally add PDF only if tested.
+- Implement Markdown, TXT and HTML readers with clear format-specific boundaries and locators. The approved user-requested scope addition also covers tested PDF, Office, OpenDocument, RTF, EPUB, EML, CSV/TSV, JSON/JSONL and XML readers; parsers that need third-party packages remain optional extras.
 - Expose `probe`, `index`, `retrieve` and `health` via public contract; include size limits and non-executable HTML handling.
 - Create citation-backed section retrieval and derived summaries marked as generated if used.
 - Test independent wheel installs, plugin discover/enable/disable, unsupported format errors and security behavior.
@@ -17,7 +17,7 @@ Prerequisite: Phase 02 acceptance gate passed with recorded tests.
 
 ## Acceptance criteria — must prove with actual tests/evidence
 - `dataindex-core` wheel alone remains usable.
-- Install document wheel separately: correctly discovers Markdown/TXT/HTML and indexes sample natural sections.
+- Install document wheel separately: correctly discovers and indexes every advertised format with tested natural sections and native locators; the core-only install remains usable without optional parsers.
 - Retrieved answer includes actual source version and section locator.
 - Uninstall document wheel: core and other extensions still function.
 

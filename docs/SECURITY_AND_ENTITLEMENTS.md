@@ -93,10 +93,12 @@ through the central dispatcher.
   far to the configured endpoint, never file paths or API keys. Use a loopback or
   private endpoint for confidential sources.
 - **Secrets.** The API key comes only from `OPENAI_API_KEY`/`api_key` and is not
-  stored in the catalog, workspace, prompts, logs or errors. A database
-  configuration saved in the workspace holds approved columns and queries,
-  including fixed `source_filters` values in plaintext, so do not put secrets in
-  it.
+  stored in the catalog, workspace, prompts, logs or errors. A database server
+  password comes only from the named `DATAINDEX_*` environment variable, read
+  at each connection; a URL that contains a password is rejected, and only the
+  variable name is stored. A database configuration saved in the workspace
+  holds approved columns and queries, including fixed `source_filters` values
+  in plaintext, so do not put secrets in it.
 
 ## Data and tool constraints
 
@@ -106,7 +108,10 @@ through the central dispatcher.
 - No model-authored arbitrary SQL, shell, Python, filesystem path or URL execution.
 - SQL extensions require read-only database credentials plus operation/table/column
   allowlists, bound parameters, row/result limits, timeouts and source-level tenant
-  filtering. Code checks do not replace database permissions.
+  filtering. Code checks do not replace database permissions. The databases
+  extension's per-engine read-only session guards are defense in depth; on SQL
+  Server, Snowflake, BigQuery and ClickHouse the login is the only barrier to
+  writes.
 - Every returned fact has source ID, source version/read marker, native locator and
   executed operation. Match catalog-backed locators to their nodes; non-catalog
   locators receive structural/provenance checks unless a host verifier is supplied.

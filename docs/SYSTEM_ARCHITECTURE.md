@@ -129,7 +129,7 @@ gate, not tamper-proof protection for proprietary code.
 |---|---|
 | Core wheel only | Offline import, catalog and CLI work; no optional imports |
 | Core + documents wheel | Markdown, TXT and HTML fixtures return native locators |
-| Core + databases wheel | SQLite schema and approved bounded read operations work |
+| Core + databases wheel | SQLite schema and approved bounded read operations work without driver extras; DuckDB and server engines work with their extras |
 | Core + both free wheels | Reproducible mixed-source evidence path works |
 | Core + synthetic premium wheel | Deny, grant and revoke are checked at execution |
 | Remove one extension | Core and remaining extensions continue to work |

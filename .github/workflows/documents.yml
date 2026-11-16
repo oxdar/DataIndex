@@ -20,6 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+        optional-dependencies: ["none", "all"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,8 +31,11 @@ jobs:
       - run: python -m build --wheel --outdir dist/documents packages/extensions/documents
       - run: python -m venv .venv-documents
       - run: .venv-documents/bin/python -m pip install pytest dist/core/*.whl dist/documents/*.whl
+      - if: matrix.optional-dependencies == 'all'
+        run: .venv-documents/bin/python -m pip install "dist/documents/$(basename dist/documents/*.whl)[all]"
       - run: .venv-documents/bin/python -m pip check
       - run: .venv-documents/bin/python -m pytest packages/extensions/documents/tests -q
+      - run: .venv-documents/bin/python -m pytest tests/integration/test_document_formats_integration.py -q
       - run: .venv-documents/bin/python packages/extensions/documents/examples/basic_usage.py
       - run: .venv-documents/bin/python -m pip uninstall -y dataindex-ext-documents
       - run: .venv-documents/bin/python -m pip check

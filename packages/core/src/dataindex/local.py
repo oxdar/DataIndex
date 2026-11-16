@@ -13,7 +13,9 @@ the small duck-typed protocols below.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import stat
 import threading
 from collections.abc import Iterable, Mapping
@@ -36,16 +38,60 @@ LOCAL_DEPLOYMENT = "local"
 DEFAULT_STORAGE_PATH = "./.dataindex"
 CATALOG_FILE_NAME = "catalog.sqlite3"
 MAX_SUBMITTED_FILE_BYTES = 5 * 1024 * 1024
+MAX_SUBMITTED_BINARY_FILE_BYTES = 50 * 1024 * 1024
 DATABASE_SOURCE_TYPE = "application/vnd.sqlite3"
+DUCKDB_SOURCE_TYPE = "application/vnd.duckdb"
+# Database servers use this prefix plus the engine name, for example
+# ``application/vnd.dataindex.db.postgresql``.
+CONNECTION_SOURCE_TYPE_PREFIX = "application/vnd.dataindex.db."
+# Mirrors the documents plugin's format table. PDF and the 97-2003 Office formats
+# need that plugin's optional extras; it reports how to install them.
 DOCUMENT_SUFFIXES: Mapping[str, str] = {
     ".md": "text/markdown",
     ".markdown": "text/markdown",
     ".txt": "text/plain",
     ".text": "text/plain",
+    ".rst": "text/plain",
+    ".log": "text/plain",
+    ".yaml": "text/plain",
+    ".yml": "text/plain",
+    ".toml": "text/plain",
+    ".ini": "text/plain",
+    ".cfg": "text/plain",
     ".html": "text/html",
     ".htm": "text/html",
+    ".xhtml": "text/html",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
+    ".rtf": "application/rtf",
+    ".epub": "application/epub+zip",
+    ".eml": "message/rfc822",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".ndjson": "application/x-ndjson",
+    ".xml": "application/xml",
 }
-DATABASE_SUFFIXES = frozenset({".sqlite", ".sqlite3", ".db"})
+BINARY_DOCUMENT_SUFFIXES = frozenset(
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".odt", ".ods", ".odp", ".rtf", ".epub", ".eml",
+    }
+)
+DATABASE_SUFFIXES = frozenset({".sqlite", ".sqlite3", ".db", ".duckdb", ".ddb"})
+_DUCKDB_SUFFIXES = frozenset({".duckdb", ".ddb"})
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+_DUCKDB_MAGIC = b"DUCK"
+_URL_AUTHORITY_END = re.compile(r"[/?#]")
 _INSTALL_HINTS = {
     DOCUMENTS_PLUGIN_ID: "pip install dataindex-ext-documents",
     DATABASES_PLUGIN_ID: "pip install dataindex-ext-databases",
@@ -73,6 +119,31 @@ class DatabaseRegistrar(Protocol):
         database_path: str | os.PathLike[str],
         config: Mapping[str, JsonValue],
     ) -> None: ...
+
+    def unregister_database(self, source_id: str) -> int: ...
+
+
+@runtime_checkable
+class ConnectionRegistrar(Protocol):
+    """What local mode needs from a databases plugin to use database servers.
+
+    It is separate from ``DatabaseRegistrar`` so a plugin without server support
+    still serves database files.
+    """
+
+    def describe_connection(
+        self, connection: Mapping[str, object]
+    ) -> Mapping[str, JsonValue]: ...
+
+    def connection_source_version(self, config: Mapping[str, JsonValue]) -> str: ...
+
+    def register_connection_config(
+        self,
+        source: SourceRef,
+        config: Mapping[str, JsonValue],
+        *,
+        expected_state: str | None = None,
+    ) -> str: ...
 
     def unregister_database(self, source_id: str) -> int: ...
 
@@ -230,17 +301,46 @@ def classify_file(path: Path) -> FileKind:
     if suffix in DOCUMENT_SUFFIXES:
         return FileKind("document", DOCUMENT_SUFFIXES[suffix], DOCUMENTS_PLUGIN_ID)
     if suffix in DATABASE_SUFFIXES:
-        return FileKind("database", DATABASE_SOURCE_TYPE, DATABASES_PLUGIN_ID)
-    if suffix == ".pdf":
-        raise ConfigurationError(
-            "PDF files are not supported in DataIndex v0.1.0; convert the PDF to "
-            "Markdown or text first"
-        )
+        return FileKind("database", database_file_type(path), DATABASES_PLUGIN_ID)
     raise ConfigurationError(
-        f"unsupported file type {suffix or '(no extension)'!r}; DataIndex v0.1.0 "
-        f"reads {', '.join(sorted(DOCUMENT_SUFFIXES))} documents and "
-        f"{', '.join(sorted(DATABASE_SUFFIXES))} SQLite databases"
+        f"unsupported file type {suffix or '(no extension)'!r}; DataIndex reads "
+        f"{', '.join(sorted(DOCUMENT_SUFFIXES))} documents and "
+        f"{', '.join(sorted(DATABASE_SUFFIXES))} SQLite or DuckDB database files"
     )
+
+
+def database_file_type(path: Path) -> str:
+    """SQLite or DuckDB, from the file header; the suffix decides when it has none."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(len(_SQLITE_MAGIC))
+    except OSError:
+        header = b""
+    if header[8:12] == _DUCKDB_MAGIC:
+        return DUCKDB_SOURCE_TYPE
+    if header.startswith(_SQLITE_MAGIC):
+        return DATABASE_SOURCE_TYPE
+    if path.suffix.lower() in _DUCKDB_SUFFIXES:
+        return DUCKDB_SOURCE_TYPE
+    return DATABASE_SOURCE_TYPE
+
+
+def url_has_password(url: str) -> bool:
+    """True when a connection URL carries a password in its user information."""
+    _, separator, rest = url.partition("://")
+    if not separator:
+        return False
+    authority = _URL_AUTHORITY_END.split(rest, maxsplit=1)[0]
+    user_info, at, _ = authority.rpartition("@")
+    return bool(at) and ":" in user_info
+
+
+def connection_source_id(url: str, schema: str | None) -> str:
+    """A stable ID from the password-free URL and schema of a database server."""
+    identity = json.dumps(
+        {"url": url, "schema": schema}, sort_keys=True, separators=(",", ":")
+    )
+    return f"db-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
 
 
 def resolve_submitted_path(path: str | os.PathLike[str]) -> Path:
@@ -265,35 +365,50 @@ def content_version(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
+def submitted_file_limit(path: Path) -> int:
+    """The size limit for a submitted document; office, PDF and similar files get more."""
+    if path.suffix.lower() in BINARY_DOCUMENT_SUFFIXES:
+        return MAX_SUBMITTED_BINARY_FILE_BYTES
+    return MAX_SUBMITTED_FILE_BYTES
+
+
 def read_submitted_file(path: Path) -> bytes:
-    """Read a submitted file once, refusing anything over the size limit."""
+    """Read a submitted file once, refusing anything over its size limit."""
+    limit = submitted_file_limit(path)
     with path.open("rb") as handle:
-        content = handle.read(MAX_SUBMITTED_FILE_BYTES + 1)
-    if len(content) > MAX_SUBMITTED_FILE_BYTES:
+        content = handle.read(limit + 1)
+    if len(content) > limit:
         raise ConfigurationError(
-            f"{path.name!r} is larger than the {MAX_SUBMITTED_FILE_BYTES // (1024 * 1024)} "
-            "MiB limit for submitted documents"
+            f"{path.name!r} is larger than the {limit // (1024 * 1024)} "
+            "MiB limit for submitted documents of this type"
         )
     return content
 
 
 __all__ = [
+    "BINARY_DOCUMENT_SUFFIXES",
     "CATALOG_FILE_NAME",
+    "CONNECTION_SOURCE_TYPE_PREFIX",
     "DATABASES_PLUGIN_ID",
     "DATABASE_SOURCE_TYPE",
     "DATABASE_SUFFIXES",
     "DEFAULT_STORAGE_PATH",
     "DOCUMENTS_PLUGIN_ID",
     "DOCUMENT_SUFFIXES",
+    "DUCKDB_SOURCE_TYPE",
     "FIRST_PARTY_DISTRIBUTIONS",
     "LOCAL_DEPLOYMENT",
+    "MAX_SUBMITTED_BINARY_FILE_BYTES",
     "MAX_SUBMITTED_FILE_BYTES",
+    "ConnectionRegistrar",
     "DatabaseRegistrar",
     "DocumentRegistrar",
     "FileKind",
     "LocalAuthorizer",
     "classify_file",
+    "connection_source_id",
     "content_version",
+    "database_file_type",
     "first_party_plugins",
     "free_capabilities",
     "install_hint",
@@ -302,4 +417,6 @@ __all__ = [
     "resolve_submitted_path",
     "resolve_trusted_plugins",
     "source_id_for",
+    "submitted_file_limit",
+    "url_has_password",
 ]

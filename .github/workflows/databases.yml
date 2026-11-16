@@ -49,14 +49,31 @@ jobs:
       - run: python -m build --wheel --outdir dist/databases packages/extensions/databases
       - run: python -m build --wheel --outdir dist/llm packages/llm
       - run: python -m venv .venv-databases
-      - run: .venv-databases/bin/python -m pip install pytest dist/core/*.whl dist/documents/*.whl dist/databases/*.whl dist/llm/*.whl
+      # DuckDB runs in-process, SQLAlchemy serves the SQLite stand-in server and
+      # mongomock stands in for MongoDB; real servers run in database-servers.
+      - run: >-
+          .venv-databases/bin/python -m pip install pytest mongomock
+          dist/core/*.whl dist/documents/*.whl dist/llm/*.whl
+          "dist/databases/$(basename dist/databases/*.whl)[duckdb,postgresql,mongodb]"
       - run: .venv-databases/bin/python -m pip check
-      - run: .venv-databases/bin/python -m pytest packages/extensions/databases/tests -q
+      - run: .venv-databases/bin/python -m pytest packages/extensions/databases/tests -q -rs
+      - name: DuckDB files work with the oldest supported DuckDB
+        run: |
+          .venv-databases/bin/python -m pip install "duckdb==1.2.2"
+          .venv-databases/bin/python -m pytest packages/extensions/databases/tests/test_database_engines.py -q -rs -k duckdb
+          .venv-databases/bin/python -m pip install --upgrade "duckdb>=1.2,<3"
       - run: .venv-databases/bin/python packages/extensions/databases/examples/basic_usage.py
       - run: .venv-databases/bin/python -m pytest packages/extensions/documents/tests -q
       - run: .venv-databases/bin/python packages/extensions/documents/examples/basic_usage.py
-      - run: .venv-databases/bin/python -m pytest tests/integration -q
+      - run: .venv-databases/bin/python -m pytest tests/integration -q -rs
       - run: .venv-databases/bin/python examples/mixed_sources.py
+      - name: Without optional drivers, SQLite files still work
+        run: |
+          .venv-databases/bin/python -m pip uninstall -y duckdb SQLAlchemy psycopg psycopg-binary pymongo mongomock
+          .venv-databases/bin/python -m pip check
+          .venv-databases/bin/python -m pytest packages/extensions/databases/tests -q -rs
+          .venv-databases/bin/python -m pytest tests/integration -q -rs
+          .venv-databases/bin/python packages/extensions/databases/examples/basic_usage.py
       - run: .venv-databases/bin/python -m pip uninstall -y dataindex-ext-databases
       - run: .venv-databases/bin/python -m pip check
       - run: .venv-databases/bin/python -m pytest packages/extensions/documents/tests -q
@@ -66,3 +83,126 @@ jobs:
       - run: .venv-databases/bin/python -m pytest packages/core/tests -q
       - run: .venv-databases/bin/python -c "import dataindex; print(dataindex.__version__)"
       - run: .venv-databases/bin/python -m dataindex extensions list
+
+  # Live contract tests against real servers. The passwords below protect
+  # throwaway containers that exist only for this job; they are not secrets.
+  database-servers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: Dataindex-ci-0nly
+          POSTGRES_DB: dataindex
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: Dataindex-ci-0nly
+          MYSQL_DATABASE: dataindex
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pDataindex-ci-0nly"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: Dataindex-ci-0nly
+          MARIADB_DATABASE: dataindex
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "mariadb-admin ping -h 127.0.0.1 -uroot -pDataindex-ci-0nly"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Dataindex-ci-0nly
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Dataindex-ci-0nly -Q 'SELECT 1'"
+          --health-interval 10s --health-timeout 10s --health-retries 30
+      oracle:
+        image: gvenzl/oracle-free:23-slim
+        env:
+          ORACLE_PASSWORD: Dataindex-ci-0nly
+          APP_USER: dataindex
+          APP_USER_PASSWORD: Dataindex-ci-0nly
+        ports: ["1521:1521"]
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s --health-timeout 5s --health-retries 60
+      mongodb:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: Dataindex-ci-0nly
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      DATAINDEX_TEST_POSTGRESQL_URL: postgresql://postgres@127.0.0.1:5432/dataindex
+      DATAINDEX_TEST_POSTGRESQL_PASSWORD: Dataindex-ci-0nly
+      DATAINDEX_TEST_MYSQL_URL: mysql://root@127.0.0.1:3306/dataindex
+      DATAINDEX_TEST_MYSQL_PASSWORD: Dataindex-ci-0nly
+      DATAINDEX_TEST_MARIADB_URL: mariadb://root@127.0.0.1:3307/dataindex
+      DATAINDEX_TEST_MARIADB_PASSWORD: Dataindex-ci-0nly
+      DATAINDEX_TEST_MSSQL_URL: mssql://sa@127.0.0.1:1433/dataindex?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+      DATAINDEX_TEST_MSSQL_PASSWORD: Dataindex-ci-0nly
+      DATAINDEX_TEST_ORACLE_URL: oracle://dataindex@127.0.0.1:1521?service_name=FREEPDB1
+      DATAINDEX_TEST_ORACLE_PASSWORD: Dataindex-ci-0nly
+      DATAINDEX_TEST_MONGODB_URL: mongodb://root@127.0.0.1:27017/dataindex?authSource=admin
+      DATAINDEX_TEST_MONGODB_PASSWORD: Dataindex-ci-0nly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the Microsoft ODBC Driver 18 for SQL Server
+        run: |
+          if ! odbcinst -q -d -n "ODBC Driver 18 for SQL Server" > /dev/null 2>&1; then
+            version="$(. /etc/os-release && echo "$VERSION_ID")"
+            curl -sSL -o packages-microsoft-prod.deb "https://packages.microsoft.com/config/ubuntu/${version}/packages-microsoft-prod.deb"
+            sudo dpkg -i packages-microsoft-prod.deb
+            sudo apt-get update
+            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+          fi
+      - name: Create the SQL Server test database
+        run: >-
+          docker exec ${{ job.services.mssql.id }}
+          /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$DATAINDEX_TEST_MSSQL_PASSWORD"
+          -Q "IF DB_ID('dataindex') IS NULL CREATE DATABASE dataindex"
+      - name: Wait for the Oracle application user
+        run: |
+          for attempt in $(seq 1 60); do
+            if echo "SELECT 'DI' || 'READY' FROM dual;" \
+              | docker exec -i ${{ job.services.oracle.id }} \
+                sqlplus -S -L "dataindex/${DATAINDEX_TEST_ORACLE_PASSWORD}@FREEPDB1" \
+              | grep -q DIREADY; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the Oracle application user never became available"
+          exit 1
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir dist/core packages/core
+      - run: python -m build --wheel --outdir dist/databases packages/extensions/databases
+      - run: python -m venv .venv-servers
+      - run: >-
+          .venv-servers/bin/python -m pip install pytest dist/core/*.whl
+          "dist/databases/$(basename dist/databases/*.whl)[postgresql,mysql,mssql,oracle,mongodb]"
+      - run: .venv-servers/bin/python -m pip check
+      - name: Live contract tests (a skipped live test fails the job)
+        run: |
+          set -o pipefail
+          .venv-servers/bin/python -m pytest packages/extensions/databases/tests/test_database_engines.py -k live -v -rs | tee live.log
+          if grep -q SKIPPED live.log; then
+            echo "::error::a live database test was skipped"
+            exit 1
+          fi

@@ -1,9 +1,11 @@
 """Canonical form of the typed read-only database configuration.
 
 Local mode persists the approved columns and queries of a submitted database in
-its workspace so the source can be registered again after a restart. The form is
-plain JSON (``QueryDefinition.to_mapping`` values), so core never imports the
-databases plugin. The configuration digest becomes part of the source version:
+its workspace so the source can be registered again after a restart. A database
+server also keeps its password-free connection (URL, schema and the name of the
+environment variable that holds the password), never the password itself. The
+form is plain JSON (``QueryDefinition.to_mapping`` values), so core never imports
+the databases plugin. The configuration digest becomes part of the source version:
 approving different queries yields a new source revision, and stored evidence
 can never be attributed to a configuration that did not produce it.
 """
@@ -22,12 +24,17 @@ MAX_ALLOWED_TABLES = 256
 MAX_COLUMNS_PER_TABLE = 1_024
 MAX_SUMMARIZED_QUERIES = 256
 MAX_SUMMARY_TEXT_CHARS = 128
+MAX_CONNECTION_FIELDS = 8
+MAX_CONNECTION_VALUE_CHARS = 4_096
 DIGEST_CHARS = 16
+_DIGEST_SEPARATOR = "+q"
 
 
 def normalize_database_config(
     allowed_columns: Mapping[str, Iterable[str]],
     queries: Sequence[object],
+    *,
+    connection: Mapping[str, object] | None = None,
 ) -> dict[str, JsonValue]:
     """Return the canonical ``{"allowed_columns", "queries"}`` configuration.
 
@@ -35,6 +42,9 @@ def normalize_database_config(
     mapping form. Tables, columns and queries are sorted so the same approval
     always produces the same digest. Detailed validation stays in the databases
     plugin; this only checks shape, JSON compatibility and size.
+
+    A database server also gets a ``connection`` entry: the plugin's canonical,
+    password-free connection mapping. ``None`` values are dropped.
     """
     if not isinstance(allowed_columns, Mapping) or not allowed_columns:
         raise ValueError("allowed_columns must map at least one table to its columns")
@@ -79,11 +89,18 @@ def normalize_database_config(
         "allowed_columns": dict(sorted(normalized_columns.items())),
         "queries": mappings,
     }
+    if connection is not None:
+        config["connection"] = _normalize_connection(connection)
     if len(_canonical_json(config).encode("utf-8")) > MAX_CONFIG_JSON_BYTES:
         raise ValueError(
             f"the database configuration exceeds {MAX_CONFIG_JSON_BYTES // 1024} KiB"
         )
     return config
+
+
+def is_connection_config(config: object) -> bool:
+    """True when a stored configuration describes a database server."""
+    return isinstance(config, Mapping) and isinstance(config.get("connection"), Mapping)
 
 
 def config_digest(config: Mapping[str, JsonValue]) -> str:
@@ -93,7 +110,12 @@ def config_digest(config: Mapping[str, JsonValue]) -> str:
 
 def database_version(file_state_version: str, config: Mapping[str, JsonValue]) -> str:
     """Combine the file-state version with the approved-configuration digest."""
-    return f"{file_state_version}+q{config_digest(config)[:DIGEST_CHARS]}"
+    return f"{file_state_version}{_DIGEST_SEPARATOR}{config_digest(config)[:DIGEST_CHARS]}"
+
+
+def database_state(version: str) -> str:
+    """The file or schema state part of a ``database_version`` value."""
+    return version.rsplit(_DIGEST_SEPARATOR, 1)[0]
 
 
 def query_summaries(config: Mapping[str, JsonValue] | None) -> list[JsonValue]:
@@ -165,6 +187,26 @@ def _summarize(item: object) -> dict[str, JsonValue] | None:
     if isinstance(max_rows, int) and not isinstance(max_rows, bool):
         summary["max_rows"] = max_rows
     return summary
+
+
+def _normalize_connection(connection: Mapping[str, object]) -> dict[str, JsonValue]:
+    if not isinstance(connection, Mapping) or len(connection) > MAX_CONNECTION_FIELDS:
+        raise ValueError("connection must be an object with a url")
+    normalized: dict[str, JsonValue] = {}
+    for key, value in connection.items():
+        if value is None:
+            continue
+        if (
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or not value
+            or len(value) > MAX_CONNECTION_VALUE_CHARS
+        ):
+            raise ValueError("connection fields must be non-empty strings")
+        normalized[key] = value
+    if "url" not in normalized:
+        raise ValueError("connection must be an object with a url")
+    return dict(sorted(normalized.items()))
 
 
 def _items(value: object) -> list[object]:

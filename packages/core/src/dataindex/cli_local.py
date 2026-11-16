@@ -46,7 +46,8 @@ def add_local_commands(
     commands: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
     submit = commands.add_parser(
-        "submit", help="index a Markdown, text or HTML file in the workspace"
+        "submit",
+        help="index a document (PDF, Office, text, Markdown, HTML, CSV, JSON and more)",
     )
     submit.add_argument("path", type=Path)
     submit.add_argument("--name", help="display name (default: the file name)")
@@ -55,9 +56,32 @@ def add_local_commands(
 
     submit_db = commands.add_parser(
         "submit-db",
-        help="register a SQLite database with an approved set of read-only queries",
+        help=(
+            "register a SQLite or DuckDB file, or a database server URL, with an "
+            "approved set of read-only queries"
+        ),
+        description=(
+            "Register a database with the read-only queries you approve. Pass the "
+            "path of a SQLite or DuckDB file, or --url for a database server such "
+            "as postgresql://reader@db.example.com/sales. URLs never hold the "
+            "password: export it in a DATAINDEX_... environment variable and pass "
+            "its name with --password-env."
+        ),
     )
-    submit_db.add_argument("path", type=Path)
+    submit_db.add_argument("path", type=Path, nargs="?")
+    submit_db.add_argument(
+        "--url",
+        metavar="URL",
+        help="database server URL without a password (instead of PATH)",
+    )
+    submit_db.add_argument(
+        "--password-env",
+        metavar="NAME",
+        help="environment variable that holds the server password (DATAINDEX_...)",
+    )
+    submit_db.add_argument(
+        "--schema", metavar="NAME", help="database schema to read on the server"
+    )
     submit_db.add_argument(
         "--config",
         required=True,
@@ -65,7 +89,9 @@ def add_local_commands(
         metavar="FILE",
         help="JSON file with the allowed_columns and queries objects",
     )
-    submit_db.add_argument("--name", help="display name (default: the file name)")
+    submit_db.add_argument(
+        "--name", help="display name (default: the file name or the server)"
+    )
     _add_storage(submit_db)
     _add_json(submit_db)
 
@@ -190,30 +216,54 @@ def _print_warning(message: str) -> None:
 
 
 def _submit(args: argparse.Namespace) -> int:
+    if args.command == "submit-db":
+        return _submit_database(args)
     path: Path = args.path
-    is_database = args.command == "submit-db"
-    is_database_file = path.suffix.lower() in DATABASE_SUFFIXES
-    if is_database and not is_database_file:
+    if path.suffix.lower() in DATABASE_SUFFIXES:
         raise ConfigurationError(
-            f"{path.name!r} is not a SQLite database; submit documents with: "
-            "dataindex submit PATH"
-        )
-    if is_database_file and not is_database:
-        raise ConfigurationError(
-            f"{path.name!r} is a SQLite database; submit it with: "
+            f"{path.name!r} is a database file; submit it with: "
             "dataindex submit-db PATH --config FILE"
         )
-    config = _read_database_config(args.config) if is_database else None
     with DataIndexClient(storage_path=args.storage) as client:
-        if config is None:
-            result = client.submit_document(path, name=args.name)
+        result = client.submit_document(path, name=args.name)
+    _print_submitted(args, result)
+    return 0
+
+
+def _submit_database(args: argparse.Namespace) -> int:
+    path: Path | None = args.path
+    url: str | None = args.url
+    if (path is None) == (url is None):
+        raise ConfigurationError(
+            "give exactly one of a database file PATH or --url URL"
+        )
+    if url is None and (args.password_env is not None or args.schema is not None):
+        raise ConfigurationError("--password-env and --schema need --url")
+    if path is not None and path.suffix.lower() not in DATABASE_SUFFIXES:
+        raise ConfigurationError(
+            f"{path.name!r} is not a database file; submit documents with: "
+            "dataindex submit PATH"
+        )
+    allowed_columns, queries = _read_database_config(args.config)
+    with DataIndexClient(storage_path=args.storage) as client:
+        if path is not None:
+            result = client.submit_database(
+                path, allowed_columns=allowed_columns, queries=queries, name=args.name
+            )
         else:
             result = client.submit_database(
-                path,
-                allowed_columns=config[0],
-                queries=config[1],
+                url=url,
+                password_env=args.password_env,
+                schema=args.schema,
+                allowed_columns=allowed_columns,
+                queries=queries,
                 name=args.name,
             )
+    _print_submitted(args, result)
+    return 0
+
+
+def _print_submitted(args: argparse.Namespace, result: Mapping[str, JsonValue]) -> None:
     if args.json:
         _print_json(result)
     else:
@@ -221,7 +271,6 @@ def _submit(args: argparse.Namespace) -> int:
             f"Submitted {_field(result, 'name')} as {_field(result, 'doc_id')} "
             f"({_field(result, 'change')}, {_field(result, 'node_count')} nodes)"
         )
-    return 0
 
 
 def _read_database_config(path: Path) -> tuple[dict[str, object], list[object]]:

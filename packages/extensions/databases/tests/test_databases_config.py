@@ -51,7 +51,13 @@ from dataindex_ext_databases import plugin as plugin_module
 from dataindex_ext_databases import sqlite as sqlite_module
 from dataindex_ext_databases.plugin import QUERY_TOOL_ID
 from dataindex_ext_databases.queries import build_query
-from dataindex_ext_databases.sqlite import open_read_only, run_bounded_query
+from dataindex_ext_databases.sqlite import (
+    NO_VIEWS,
+    ViewAccess,
+    inspect_view_access,
+    open_read_only,
+    run_bounded_query,
+)
 
 FIXTURE = Path(__file__).parents[1] / "examples" / "fixtures" / "contracts_invoices.sql"
 SOURCE_TYPE = "application/vnd.sqlite3"
@@ -1578,6 +1584,7 @@ def run_raw(
     path: Path,
     statement: str,
     allowed: Mapping[str, frozenset[str]] = RAW_ALLOWLIST,
+    view_access: ViewAccess = NO_VIEWS,
 ) -> list[dict[str, object]]:
     """Run SQL the query builder would never produce through the real authorizer."""
     monkeypatch.setattr(
@@ -1585,7 +1592,9 @@ def run_raw(
     )
     connection = open_read_only(path)
     try:
-        rows, _ = run_bounded_query(connection, invoice_query(), {}, 5, allowed, None)
+        rows, _ = run_bounded_query(
+            connection, invoice_query(), {}, 5, allowed, None, view_access
+        )
     finally:
         connection.close()
     return rows
@@ -1721,6 +1730,35 @@ def test_authorizer_fails_closed_for_reads_outside_the_allowlist(
         run_raw(monkeypatch, raw_database, statement)
 
     assert "TOP-SECRET-VALUE" not in str(raised.value) + repr(raised.value.__cause__)
+
+
+def test_authorizer_allows_inside_a_view_only_what_registration_recorded(
+    monkeypatch: pytest.MonkeyPatch, raw_database: Path
+) -> None:
+    with contextlib.closing(sqlite3.connect(raw_database)) as connection:
+        connection.executescript(
+            "CREATE VIEW open_refs AS SELECT invoice_id, lower(reference) AS ref "
+            "FROM invoices WHERE paid = 0;"
+            "CREATE VIEW leaky AS SELECT secret_id, api_key FROM secrets;"
+        )
+    with contextlib.closing(open_read_only(raw_database)) as connection:
+        access = inspect_view_access(connection, ["open_refs"])
+    allowed = {
+        "open_refs": frozenset({"invoice_id", "ref"}),
+        "leaky": frozenset({"secret_id", "api_key"}),
+    }
+    statement = 'SELECT "open_refs"."ref" AS "r" FROM "open_refs" ORDER BY 1 LIMIT 1'
+
+    assert run_raw(monkeypatch, raw_database, statement, allowed, access) == [
+        {"r": "ct-2026-01"}
+    ]
+    for denied, view_access in (
+        (statement, NO_VIEWS),
+        ('SELECT "leaky"."api_key" FROM "leaky"', access),
+    ):
+        with pytest.raises(DatabaseIndexError) as raised:
+            run_raw(monkeypatch, raw_database, denied, allowed, view_access)
+        assert "TOP-SECRET-VALUE" not in str(raised.value) + repr(raised.value.__cause__)
 
 
 # --- bounds -------------------------------------------------------------------

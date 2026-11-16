@@ -1,0 +1,63 @@
+name: Local UI
+
+on:
+  push:
+    paths:
+      - "packages/core/**"
+      - "packages/extensions/documents/**"
+      - "packages/llm/**"
+      - "packages/ui/**"
+      - ".github/workflows/ui.yml"
+  pull_request:
+    paths:
+      - "packages/core/**"
+      - "packages/extensions/documents/**"
+      - "packages/llm/**"
+      - "packages/ui/**"
+      - ".github/workflows/ui.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-ui:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir dist/local packages/core
+      - run: python -m build --wheel --outdir dist/local packages/extensions/documents
+      - run: python -m build --wheel --outdir dist/local packages/llm
+      - run: python -m build --wheel --sdist --outdir dist/local packages/ui
+      - run: python -m venv .venv-ui
+      - name: Select the venv interpreter
+        run: |
+          if [ -x .venv-ui/bin/python ]; then
+            echo "VENV_PYTHON=.venv-ui/bin/python" >> "$GITHUB_ENV"
+          else
+            echo "VENV_PYTHON=.venv-ui/Scripts/python.exe" >> "$GITHUB_ENV"
+          fi
+      - run: >-
+          "$VENV_PYTHON" -m pip install pytest httpx
+          --find-links dist/local
+          dataindex-core dataindex-ext-documents dataindex-llm dataindex-ui
+      - run: '"$VENV_PYTHON" -m pip check'
+      - run: '"$VENV_PYTHON" -m pytest packages/ui/tests -q -p no:cacheprovider'
+      - run: '"$VENV_PYTHON" -m dataindex_ui --version'
+      - run: '"$VENV_PYTHON" -m pip uninstall -y dataindex-ui'
+      - run: '"$VENV_PYTHON" -m pip check'
+      - run: >-
+          "$VENV_PYTHON" -c "import importlib.util as u, dataindex;
+          assert u.find_spec('dataindex_ui') is None; print(dataindex.__version__)"

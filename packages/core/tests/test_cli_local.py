@@ -829,11 +829,9 @@ def test_submit_of_a_directory_is_refused(
 @pytest.mark.parametrize(
     ("name", "message"),
     [
-        pytest.param(
-            "report.pdf", "PDF files are not supported in DataIndex v0.1.0", id="pdf"
-        ),
-        pytest.param("report.PDF", "PDF files are not supported", id="pdf-upper-case"),
-        pytest.param("report.docx", "unsupported file type '.docx'", id="docx"),
+        pytest.param("photo.png", "unsupported file type '.png'", id="png"),
+        pytest.param("SETUP.EXE", "unsupported file type '.exe'", id="exe-upper-case"),
+        pytest.param("bundle.zip", "unsupported file type '.zip'", id="zip"),
         pytest.param(
             "README", "unsupported file type '(no extension)'", id="no-extension"
         ),
@@ -847,14 +845,15 @@ def test_submit_refuses_unsupported_file_types(
     message: str,
 ) -> None:
     path = tmp_path / name
-    path.write_bytes(b"%PDF-1.4 not really")
+    path.write_bytes(b"\x89PNG\r\n\x1a\n not really")
     assert_clean_failure(
         invoke(capsys, "submit", str(path), "--storage", str(ws)), message
     )
 
 
 @pytest.mark.parametrize(
-    "name", ["orders.sqlite", "orders.sqlite3", "orders.db", "ORDERS.DB"]
+    "name",
+    ["orders.sqlite", "orders.sqlite3", "orders.db", "ORDERS.DB", "orders.duckdb"],
 )
 def test_submit_points_database_files_to_submit_db(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, ws: Path, name: str
@@ -863,7 +862,7 @@ def test_submit_points_database_files_to_submit_db(
     path.write_bytes(b"SQLite format 3\x00")
     result = invoke(capsys, "submit", str(path), "--storage", str(ws))
     assert_clean_failure(
-        result, "is a SQLite database", "dataindex submit-db PATH --config FILE"
+        result, "is a database file", "dataindex submit-db PATH --config FILE"
     )
 
 
@@ -1033,7 +1032,7 @@ def test_submit_db_points_other_files_to_submit(
     notes = write_file(tmp_path, "notes.md")
     config = write_config(tmp_path, VALID_DATABASE_CONFIG)
     result = submit_db(capsys, notes, config, ws)
-    assert_clean_failure(result, "is not a SQLite database", "dataindex submit PATH")
+    assert_clean_failure(result, "is not a database file", "dataindex submit PATH")
 
 
 def test_submit_db_without_any_plugin_gives_the_install_hint(
@@ -1194,6 +1193,89 @@ def test_submit_db_hands_the_parsed_config_and_name_to_the_client(
         "queries": [{"query_id": "q1"}],
         "name": "Orders",
     }
+
+
+SERVER_URL = "postgresql+psycopg://reader@db.example.com:5432/sales"
+
+
+def test_submit_db_hands_a_server_connection_to_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    ws: Path,
+) -> None:
+    received: dict[str, object] = {}
+
+    def submit_database(
+        self: DataIndexClient, path: object = None, **arguments: object
+    ) -> dict[str, object]:
+        received.update(arguments, path=path)
+        return {"doc_id": "db-2", "name": "Sales", "change": "new", "node_count": 3}
+
+    monkeypatch.setattr(DataIndexClient, "submit_database", submit_database)
+    config = write_config(tmp_path, VALID_DATABASE_CONFIG)
+    code, out, err = invoke(
+        capsys,
+        "submit-db",
+        "--url",
+        SERVER_URL,
+        "--password-env",
+        "DATAINDEX_SALES_PASSWORD",
+        "--schema",
+        "public",
+        "--config",
+        str(config),
+        "--storage",
+        str(ws),
+    )
+    assert (code, out, err) == (0, "Submitted Sales as db-2 (new, 3 nodes)\n", "")
+    assert received == {
+        "path": None,
+        "url": SERVER_URL,
+        "password_env": "DATAINDEX_SALES_PASSWORD",
+        "schema": "public",
+        "allowed_columns": {"orders": ["id", "total"]},
+        "queries": [{"query_id": "q1"}],
+        "name": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        pytest.param([], "exactly one of a database file PATH or --url", id="neither"),
+        pytest.param(
+            ["{database}", "--url", SERVER_URL],
+            "exactly one of a database file PATH or --url",
+            id="both",
+        ),
+        pytest.param(
+            ["{database}", "--password-env", "DATAINDEX_X"],
+            "--password-env and --schema need --url",
+            id="password-env-without-url",
+        ),
+        pytest.param(
+            ["{database}", "--schema", "public"],
+            "--password-env and --schema need --url",
+            id="schema-without-url",
+        ),
+    ],
+)
+def test_submit_db_needs_exactly_one_source(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    ws: Path,
+    database_file: Path,
+    arguments: list[str],
+    message: str,
+) -> None:
+    config = write_config(tmp_path, VALID_DATABASE_CONFIG)
+    argv = [item.replace("{database}", str(database_file)) for item in arguments]
+    result = invoke(
+        capsys, "submit-db", *argv, "--config", str(config), "--storage", str(ws)
+    )
+    assert_clean_failure(result, message)
+    assert not ws.exists()
 
 
 # --- chat: model selection -----------------------------------------------------

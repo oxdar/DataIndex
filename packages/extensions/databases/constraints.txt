@@ -1,3 +1,23 @@
 # Runtime dependencies are bounded in pyproject.toml:
 # dataindex-core>=0.1,<0.2
 # SQLite access uses Python's standard-library sqlite3 module.
+#
+# Optional extras, each imported only when that engine is used:
+# duckdb:      duckdb>=1.2,<3                         (MIT; 1.1 cannot compare a DATE
+#              column with a text parameter, so approved date filters fail there)
+# postgresql:  SQLAlchemy>=2.0.30,<2.2                (MIT)
+#              psycopg[binary]>=3.2,<4                (LGPL-3.0; binary wheel bundles libpq)
+# mysql:       SQLAlchemy, PyMySQL[rsa]>=1.1,<2       (MIT; also used for MariaDB; the rsa
+#              extra adds cryptography (Apache-2.0 or BSD-3-Clause) for MySQL 8's
+#              default caching_sha2_password login)
+# mssql:       SQLAlchemy, pyodbc>=5.0,<6             (MIT-0; needs Microsoft ODBC Driver 17/18)
+# oracle:      SQLAlchemy, oracledb>=2.0,<27          (Apache-2.0 or UPL-1.0; thin mode)
+# snowflake:   SQLAlchemy, snowflake-sqlalchemy>=1.7,<3  (Apache-2.0)
+# bigquery:    SQLAlchemy, sqlalchemy-bigquery>=1.11,<2  (MIT)
+# clickhouse:  SQLAlchemy, clickhouse-connect>=0.8,<2    (Apache-2.0)
+# mongodb:     pymongo>=4.6,<5                        (Apache-2.0)
+#
+# Versions verified in development: SQLAlchemy 2.1.8, duckdb 2.0.0 and 1.2.2, psycopg 3.3.9,
+# PyMySQL 1.2.4, pyodbc 5.5.0, oracledb 26.1.0, snowflake-sqlalchemy 2.1.0,
+# sqlalchemy-bigquery 1.18.0, clickhouse-connect 1.12.0, pymongo 4.20.0,
+# mongomock 4.3.0 (tests only).

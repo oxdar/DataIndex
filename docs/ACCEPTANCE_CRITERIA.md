@@ -15,7 +15,7 @@
 | 00 | Greenfield ADRs and specs | Full architecture, extension ABI, license policy | Explicitly no fiction about existing implementation |
 | 01 | Core wheel | Install/import/list plugins without extra deps | Core-only environment does not import extension libs |
 | 02 | Persistent index | Reopen indexed hierarchy, graph and source locators | Reject duplicate/corrupt/version-conflicting nodes |
-| 03 | Documents free wheel | 3 format fixture retrieval with exact section locator | Unsupported format fails clearly; uninstall isolation |
+| 03 | Documents free wheel | Fixture retrieval for every advertised format with exact native locator; both no-extra and `[all]` wheel installs pass | Unknown format and missing optional parser fail clearly; uninstall isolation |
 | 04 | Databases free wheel | SQLite schema + allowed filtered aggregation correct | DML, unbounded reads and unauthorized table denied |
 | 05 | Reasoning | Multi-source answer with real locator, bounded tool calls | Hallucinated locator, prompt injection, no-source abstention |
 | 06 | Commercial readiness | Separate synthetic premium wheel deny→grant→revoke | No license never executes tool; free plugins unaffected |

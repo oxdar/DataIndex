@@ -7,6 +7,7 @@ import math
 import re
 import sqlite3
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -24,6 +25,16 @@ from dataindex_ext_databases.queries import (
     build_query,
     quote_identifier,
 )
+from dataindex_ext_databases.schema import (
+    MAX_COLUMNS_PER_TABLE,
+    MAX_SCHEMA_COLUMNS,
+    MAX_SCHEMA_FOREIGN_KEYS,
+    MAX_SCHEMA_TABLES,
+    ColumnInfo,
+    ForeignKeyInfo,
+    SchemaInfo,
+    TableInfo,
+)
 
 MAX_SQLITE_VM_INSTRUCTIONS = 100_000
 SQLITE_PROGRESS_INTERVAL = 1_000
@@ -31,45 +42,44 @@ SQLITE_BUSY_TIMEOUT_SECONDS = 1.0
 MAX_SQLITE_VALUE_BYTES = 64 * 1024
 MAX_SQLITE_RESULT_BYTES = 64 * 1024
 MAX_SQLITE_RESULT_ROWS = 100
-MAX_SCHEMA_TABLES = 256
-MAX_SCHEMA_COLUMNS = 4096
-MAX_COLUMNS_PER_TABLE = 512
-MAX_SCHEMA_FOREIGN_KEYS = 4096
+MAX_VIEW_ACCESSES = 4096
+
+__all__ = [
+    "MAX_COLUMNS_PER_TABLE",
+    "MAX_SCHEMA_COLUMNS",
+    "MAX_SCHEMA_FOREIGN_KEYS",
+    "MAX_SCHEMA_TABLES",
+    "MAX_SQLITE_RESULT_BYTES",
+    "MAX_SQLITE_RESULT_ROWS",
+    "MAX_SQLITE_VALUE_BYTES",
+    "NO_VIEWS",
+    "ColumnInfo",
+    "ForeignKeyInfo",
+    "SchemaInfo",
+    "TableInfo",
+    "ViewAccess",
+    "inspect_schema",
+    "inspect_view_access",
+    "open_read_only",
+    "query_schema_version",
+    "run_bounded_query",
+]
 
 
 @dataclass(frozen=True, slots=True)
-class ColumnInfo:
-    name: str
-    declared_type: str
-    not_null: bool
-    primary_key_position: int
-    ordinal: int
+class ViewAccess:
+    """The reads and functions approved views perform, keyed by the view.
+
+    SQLite names the innermost view responsible for each access in the
+    authorizer's last argument, so a read is allowed only inside the view
+    that was recorded making it.
+    """
+
+    reads: frozenset[tuple[str, str, str | None]] = frozenset()
+    functions: frozenset[tuple[str, str]] = frozenset()
 
 
-@dataclass(frozen=True, slots=True)
-class ForeignKeyInfo:
-    constraint_id: int
-    sequence: int
-    from_table: str
-    from_column: str
-    to_table: str
-    to_column: str
-    on_update: str
-    on_delete: str
-
-
-@dataclass(frozen=True, slots=True)
-class TableInfo:
-    name: str
-    columns: tuple[ColumnInfo, ...]
-    foreign_keys: tuple[ForeignKeyInfo, ...]
-    primary_key_columns: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaInfo:
-    version: int
-    tables: Mapping[str, TableInfo]
+NO_VIEWS = ViewAccess()
 
 
 def open_read_only(path: Path) -> sqlite3.Connection:
@@ -98,31 +108,41 @@ def inspect_schema(
 ) -> SchemaInfo:
     schema_version = int(connection.execute("PRAGMA schema_version").fetchone()[0])
     placeholders = ",".join("?" for _ in allowed_columns)
-    database_tables = {
-        row["name"]: row["sql"]
+    database_objects = {
+        row["name"]: (row["type"], row["sql"])
         for row in connection.execute(
-            "SELECT name, sql FROM sqlite_schema "
-            f"WHERE type = 'table' AND name IN ({placeholders}) ORDER BY name",
+            "SELECT name, type, sql FROM sqlite_schema "
+            f"WHERE type IN ('table', 'view') AND name IN ({placeholders}) "
+            "ORDER BY name",
             tuple(allowed_columns),
         )
     }
-    missing_tables = sorted(set(allowed_columns) - set(database_tables))
+    missing_tables = sorted(set(allowed_columns) - set(database_objects))
     if missing_tables:
         raise UnauthorizedDatabaseAccessError(
-            f"allowlisted tables are absent: {missing_tables}"
+            f"allowlisted tables or views are absent: {missing_tables}"
         )
 
     table_columns: dict[str, tuple[ColumnInfo, ...]] = {}
     table_primary_keys: dict[str, tuple[str, ...]] = {}
     for table_name, permitted_columns in allowed_columns.items():
-        create_sql = database_tables[table_name] or ""
-        if re.match(r"\s*CREATE\s+VIRTUAL\s+TABLE\b", create_sql, re.IGNORECASE):
+        object_type, create_sql = database_objects[table_name]
+        if object_type == "table" and _is_virtual(create_sql):
             raise UnauthorizedDatabaseAccessError(
                 f"virtual table {table_name!r} is not supported"
             )
-        rows = connection.execute(
-            f"PRAGMA table_info({quote_identifier(table_name)})"
-        ).fetchmany(MAX_COLUMNS_PER_TABLE + 1)
+        try:
+            rows = connection.execute(
+                f"PRAGMA table_info({quote_identifier(table_name)})"
+            ).fetchmany(MAX_COLUMNS_PER_TABLE + 1)
+        except sqlite3.OperationalError as error:
+            if object_type != "view":
+                raise
+            # Describing a view compiles it; trusted_schema=OFF refuses unsafe functions
+            # and virtual tables inside it.
+            raise UnauthorizedDatabaseAccessError(
+                f"view {table_name!r} is not supported: {str(error)[:200]}"
+            ) from None
         if len(rows) > MAX_COLUMNS_PER_TABLE:
             raise UnauthorizedDatabaseAccessError(
                 f"table {table_name!r} exceeds the supported schema-column limit"
@@ -219,8 +239,95 @@ def inspect_schema(
             columns=columns,
             foreign_keys=tuple(foreign_keys),
             primary_key_columns=table_primary_keys[table_name],
+            object_kind=database_objects[table_name][0],
         )
     return SchemaInfo(schema_version, table_info)
+
+
+def inspect_view_access(
+    connection: sqlite3.Connection, views: Sequence[str]
+) -> ViewAccess:
+    """Record what each allowlisted view reads, without reading any rows.
+
+    Each view is compiled with ``EXPLAIN`` under a recording authorizer. A view
+    may read only ordinary tables and other views in the main schema, and may
+    call only the functions SQLite accepts in views with ``trusted_schema``
+    off. Anything else, or a SQLite library that does not name the view behind
+    a read, makes the view unsupported.
+    """
+    if not views:
+        return NO_VIEWS
+    reads: set[tuple[str, str, str | None]] = set()
+    functions: set[tuple[str, str]] = set()
+    for view in views:
+        refused: list[str] = []
+
+        def record(
+            action: int,
+            first: str | None,
+            second: str | None,
+            database: str | None,
+            context: str | None,
+        ) -> int:
+            if len(reads) + len(functions) >= MAX_VIEW_ACCESSES:
+                refused.append(f"more than {MAX_VIEW_ACCESSES} column reads")
+                return sqlite3.SQLITE_DENY
+            if action in {
+                sqlite3.SQLITE_SELECT,
+                getattr(sqlite3, "SQLITE_RECURSIVE", -100),
+            }:
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_READ and first == view and context is None:
+                return sqlite3.SQLITE_OK
+            if context is None:
+                refused.append(
+                    f"SQLite {sqlite3.sqlite_version} does not name the view behind "
+                    "each access"
+                )
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_READ and first is not None and database == "main":
+                reads.add((context, first, second))
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_FUNCTION:
+                functions.add((context, (second or first or "").upper()))
+                return sqlite3.SQLITE_OK
+            refused.append("an operation other than reading main-schema tables")
+            return sqlite3.SQLITE_DENY
+
+        connection.set_authorizer(record)
+        try:
+            connection.execute(f"EXPLAIN SELECT * FROM {quote_identifier(view)}").close()
+        except sqlite3.Error as error:
+            reason = refused[0] if refused else str(error)[:200]
+            raise UnauthorizedDatabaseAccessError(
+                f"view {view!r} is not supported: {reason}"
+            ) from None
+        finally:
+            connection.set_authorizer(None)
+
+    for name in sorted({table for _, table, _ in reads}):
+        row = connection.execute(
+            "SELECT type, sql FROM sqlite_schema "
+            "WHERE type IN ('table', 'view') AND name = ?",
+            (name,),
+        ).fetchone()
+        if (
+            row is None
+            or name.casefold().startswith("sqlite_")
+            or (row["type"] == "table" and _is_virtual(row["sql"]))
+        ):
+            viewer = min(view for view, table, _ in reads if table == name)
+            raise UnauthorizedDatabaseAccessError(
+                f"view {viewer!r} is not supported: it reads {name!r}, which is "
+                "not an ordinary table or view"
+            )
+    return ViewAccess(frozenset(reads), frozenset(functions))
+
+
+def _is_virtual(create_sql: str | None) -> bool:
+    return bool(
+        re.match(r"\s*CREATE\s+VIRTUAL\s+TABLE\b", create_sql or "", re.IGNORECASE)
+    )
 
 
 def query_schema_version(connection: sqlite3.Connection) -> int:
@@ -234,6 +341,7 @@ def run_bounded_query(
     limit: int,
     allowed_columns: Mapping[str, frozenset[str]],
     deadline_monotonic: float | None,
+    view_access: ViewAccess = NO_VIEWS,
 ) -> tuple[list[dict[str, object]], bool]:
     statement, parameters = build_query(definition, filters, limit)
     allowed_tables = frozenset(allowed_columns)
@@ -248,14 +356,31 @@ def run_bounded_query(
         first: str | None,
         second: str | None,
         database: str | None,
-        trigger: str | None,
+        view: str | None,
     ) -> int:
-        del trigger
         if action in {
             sqlite3.SQLITE_SELECT,
             getattr(sqlite3, "SQLITE_RECURSIVE", -100),
         }:
             return sqlite3.SQLITE_OK
+        if view is not None:
+            # Inside an approved view, allow exactly what registration recorded.
+            if action == sqlite3.SQLITE_READ:
+                return (
+                    sqlite3.SQLITE_OK
+                    if database == "main"
+                    and first is not None
+                    and (view, first, second) in view_access.reads
+                    else sqlite3.SQLITE_DENY
+                )
+            if action == sqlite3.SQLITE_FUNCTION:
+                function_name = (second or first or "").upper()
+                return (
+                    sqlite3.SQLITE_OK
+                    if (view, function_name) in view_access.functions
+                    else sqlite3.SQLITE_DENY
+                )
+            return sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_READ:
             if first in allowed_tables and second == "" and database in {None, "main"}:
                 # SQLite reports a table read that needs no ordinary column (COUNT(*),

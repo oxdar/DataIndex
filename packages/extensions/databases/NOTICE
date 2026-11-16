@@ -1,2 +1,21 @@
-This extension contains no copied third-party source code and has no runtime
-dependency beyond dataindex-core and Python's standard-library sqlite3 module.
+This extension contains no copied third-party source code. Its base install has
+no runtime dependency beyond dataindex-core and Python's standard-library
+sqlite3 module.
+
+Optional extras install third-party database drivers under their own licenses;
+they are not bundled in this distribution:
+
+- SQLAlchemy (MIT): every SQL server extra.
+- duckdb (MIT): duckdb.
+- psycopg and psycopg-binary (GNU LGPL-3.0): postgresql. The binary wheel
+  bundles libpq (PostgreSQL License). psycopg is dynamically imported, not
+  modified or vendored; users may replace it with their own build.
+- PyMySQL (MIT) and cryptography (Apache-2.0 or BSD-3-Clause): mysql.
+- pyodbc (MIT-0): mssql. The Microsoft ODBC Driver for SQL Server is a separate
+  system package under Microsoft's license terms and must be installed by the
+  user.
+- python-oracledb (Apache-2.0 or UPL-1.0): oracle.
+- snowflake-sqlalchemy (Apache-2.0): snowflake.
+- sqlalchemy-bigquery (MIT): bigquery.
+- clickhouse-connect (Apache-2.0): clickhouse.
+- pymongo (Apache-2.0): mongodb.

@@ -3,7 +3,7 @@
 **Release:** DataIndex **v0.1.0 FIRST IMPLEMENTATION**. **Phase status at pack creation:** NOT STARTED.
 
 ## Objective and dependencies
-Add database semantics natively rather than exporting whole tables as Markdown. SQLite is the initial required end-to-end adapter; PostgreSQL may follow.
+Add database semantics natively rather than exporting whole tables as Markdown. SQLite is the initial required end-to-end adapter; PostgreSQL may follow. The approved user-requested scope addition (see `docs/VERSION_0_1_SCOPE.md`) also covers DuckDB files and PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB servers through optional driver extras, with Snowflake, BigQuery and ClickHouse experimental; server engines need live contract tests before they are claimed as tested.
 
 Prerequisite: Phase 03 acceptance gate passed with recorded tests.
 

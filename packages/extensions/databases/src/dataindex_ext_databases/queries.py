@@ -470,11 +470,26 @@ def _is_scalar(value: object) -> bool:
     return False
 
 
-def build_query(
+@dataclass(frozen=True, slots=True)
+class BoundFilter:
+    """One validated predicate: ``operator`` is a filter operator, ``is_null`` or
+    ``is_not_null``; ``values`` holds the bound scalar values."""
+
+    column: ColumnRef
+    operator: str
+    values: tuple[object, ...]
+
+
+def bind_filters(
     definition: QueryDefinition,
     filters: Mapping[str, object],
     limit: int,
-) -> tuple[str, tuple[object, ...]]:
+) -> tuple[BoundFilter, ...]:
+    """Validate caller filters and the limit for one approved definition.
+
+    Every backend builds its native query from this result, so the same filter
+    names, scalar types and size bounds apply to every database engine.
+    """
     expected_filters = {rule.name for rule in definition.filters}
     if set(filters) != expected_filters:
         missing = sorted(expected_filters - set(filters))
@@ -491,6 +506,54 @@ def build_query(
             f"limit must be between 1 and {definition.max_rows}"
         )
 
+    bound: list[BoundFilter] = []
+    parameters: list[object] = []
+    all_filter_rules: tuple[FilterRule | FixedFilterRule, ...] = (
+        definition.filters + definition.source_filters
+    )
+    for rule in all_filter_rules:
+        value = rule.value if isinstance(rule, FixedFilterRule) else filters[rule.name]
+        operator, values = _filter_value(value, rule)
+        if rule.operator == "in":
+            bound.append(BoundFilter(rule.column, "in", values))
+        elif operator == "IS NULL":
+            bound.append(BoundFilter(rule.column, "is_null", ()))
+        elif operator == "IS NOT NULL":
+            bound.append(BoundFilter(rule.column, "is_not_null", ()))
+        else:
+            bound.append(BoundFilter(rule.column, rule.operator, values))
+        parameters.extend(values)
+    if len(parameters) > MAX_FILTER_BIND_PARAMETERS:
+        raise InvalidDatabaseToolRequestError(
+            f"queries support at most {MAX_FILTER_BIND_PARAMETERS} filter values"
+        )
+    try:
+        filter_size = len(
+            json.dumps(
+                parameters,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError) as error:
+        raise InvalidDatabaseToolRequestError(
+            "filter values could not be represented safely"
+        ) from error
+    if filter_size > MAX_FILTER_PAYLOAD_BYTES:
+        raise InvalidDatabaseToolRequestError(
+            f"filter values exceed the {MAX_FILTER_PAYLOAD_BYTES}-byte limit"
+        )
+    return tuple(bound)
+
+
+def build_query(
+    definition: QueryDefinition,
+    filters: Mapping[str, object],
+    limit: int,
+) -> tuple[str, tuple[object, ...]]:
+    """Return SQLite/DuckDB SQL with ``?`` placeholders and its parameters."""
+    bound = bind_filters(definition, filters, limit)
     select_parts = [
         f"{_column_sql(column)} AS "
         f"{quote_identifier(f'{column.table}__{column.column}')}"
@@ -517,49 +580,25 @@ def build_query(
 
     parameters: list[object] = []
     where_parts: list[str] = []
-    all_filter_rules: tuple[FilterRule | FixedFilterRule, ...] = (
-        definition.filters + definition.source_filters
-    )
-    for rule in all_filter_rules:
-        value = rule.value if isinstance(rule, FixedFilterRule) else filters[rule.name]
-        operator, values = _filter_value(value, rule)
-        if rule.operator == "in":
-            where_parts.append(f"{_column_sql(rule.column)} IN {operator}")
-        elif operator in {"IS NULL", "IS NOT NULL"}:
-            where_parts.append(f"{_column_sql(rule.column)} {operator}")
+    for item in bound:
+        column_sql = _column_sql(item.column)
+        if item.operator == "in":
+            placeholders = ",".join("?" for _ in item.values)
+            where_parts.append(f"{column_sql} IN ({placeholders})")
+        elif item.operator == "is_null":
+            where_parts.append(f"{column_sql} IS NULL")
+        elif item.operator == "is_not_null":
+            where_parts.append(f"{column_sql} IS NOT NULL")
         else:
-            where_parts.append(f"{_column_sql(rule.column)} {operator} ?")
-        parameters.extend(values)
-    if len(parameters) > MAX_FILTER_BIND_PARAMETERS:
-        raise InvalidDatabaseToolRequestError(
-            f"queries support at most {MAX_FILTER_BIND_PARAMETERS} filter values"
-        )
+            where_parts.append(f"{column_sql} {_FILTER_OPERATORS[item.operator]} ?")
+        parameters.extend(item.values)
     if where_parts:
         sql_parts.append("WHERE " + " AND ".join(where_parts))
-    try:
-        filter_size = len(
-            json.dumps(
-                parameters,
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-    except (TypeError, ValueError) as error:
-        raise InvalidDatabaseToolRequestError(
-            "filter values could not be represented safely"
-        ) from error
-    if filter_size > MAX_FILTER_PAYLOAD_BYTES:
-        raise InvalidDatabaseToolRequestError(
-            f"filter values exceed the {MAX_FILTER_PAYLOAD_BYTES}-byte limit"
-        )
     if definition.aggregate is not None and definition.group_by:
         sql_parts.append(
             "GROUP BY " + ", ".join(_column_sql(column) for column in definition.group_by)
         )
-    ordering = definition.order_by
-    if definition.aggregate is not None and not ordering:
-        ordering = definition.group_by
+    ordering = result_ordering(definition)
     if ordering:
         sql_parts.append(
             "ORDER BY " + ", ".join(_column_sql(column) for column in ordering)
@@ -567,3 +606,18 @@ def build_query(
     sql_parts.append("LIMIT ?")
     parameters.append(limit + 1)
     return " ".join(sql_parts), tuple(parameters)
+
+
+def result_ordering(definition: QueryDefinition) -> tuple[ColumnRef, ...]:
+    """The declared order; grouped aggregates without one order by their groups."""
+    if definition.aggregate is not None and not definition.order_by:
+        return definition.group_by
+    return definition.order_by
+
+
+def output_keys(definition: QueryDefinition) -> tuple[str, ...]:
+    """Result-row keys in select order: ``table__column`` then the aggregate alias."""
+    keys = [f"{column.table}__{column.column}" for column in definition.columns]
+    if definition.aggregate is not None:
+        keys.append(definition.aggregate.alias)
+    return tuple(keys)

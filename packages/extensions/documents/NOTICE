@@ -1,2 +1,4 @@
-This extension contains no copied third-party source code and has no runtime
-dependency beyond dataindex-core and the Python standard library.
+This extension contains no copied third-party source code. Its default runtime
+dependency is dataindex-core and the Python standard library. Optional parser
+extras install pypdf, olefile and xlrd; see the repository's
+THIRD_PARTY_NOTICES.md for their licenses and tested versions.

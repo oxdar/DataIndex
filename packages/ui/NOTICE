@@ -1,0 +1,6 @@
+This distribution contains no copied third-party source code. Its web page uses
+no external scripts, fonts or stylesheets.
+
+It depends on FastAPI, Starlette, Pydantic and Uvicorn, which are installed from
+PyPI under their own licenses and are not bundled with or copied into this
+distribution.

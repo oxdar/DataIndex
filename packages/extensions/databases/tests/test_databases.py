@@ -460,7 +460,7 @@ def test_composite_primary_key_ordering_and_foreign_key_join_are_complete(
     incomplete_order = QueryDefinition(
         "parent.rows",
         "parent",
-        (ColumnRef("parent", "parent_a"),),
+        (ColumnRef("parent", "parent_a"), ColumnRef("parent", "label")),
         order_by=(ColumnRef("parent", "parent_a"),),
     )
     with pytest.raises(
@@ -473,6 +473,19 @@ def test_composite_primary_key_ordering_and_foreign_key_join_are_complete(
             allowed_columns={"parent": ("parent_a", "label")},
             queries=(incomplete_order,),
         )
+    SQLiteDatabaseExtension().register_database(
+        source(),
+        path,
+        allowed_columns={"parent": ("parent_a", "label")},
+        queries=(
+            QueryDefinition(
+                "parent.rows",
+                "parent",
+                (ColumnRef("parent", "parent_a"), ColumnRef("parent", "label")),
+                order_by=(ColumnRef("parent", "label"), ColumnRef("parent", "parent_a")),
+            ),
+        ),
+    )
 
     composite_join = QueryDefinition(
         "child.count",
@@ -909,6 +922,193 @@ def test_schema_changes_require_a_new_source_version(tmp_path: Path) -> None:
             ),
             RetrievalContext(),
         )
+    extension.close()
+
+
+VIEW_SCRIPT = """
+CREATE VIEW open_invoices AS
+    SELECT invoice_id, contract_id, amount_cents, tenant_id,
+           lower(reference) AS reference_key
+    FROM invoices WHERE paid = 0;
+CREATE VIEW open_amounts AS
+    SELECT contract_id, amount_cents, tenant_id FROM open_invoices;
+"""
+OPEN_TENANT_A = [
+    (1, "INV-1001", 125000),
+    (1, "INV-1002", 25000),
+    (1, "INV-1003", 70000),
+    (2, "INV-2001", 90000),
+]
+VIEW_AMOUNT_COLUMNS = ("contract_id", "amount_cents", "tenant_id")
+
+
+def view_queries(view: str) -> tuple[QueryDefinition, ...]:
+    contract_id = ColumnRef(view, "contract_id")
+    amount = ColumnRef(view, "amount_cents")
+    tenant = FixedFilterRule("tenant", ColumnRef(view, "tenant_id"), "eq", "tenant-a")
+    totals = QueryDefinition(
+        "open.totals",
+        view,
+        (contract_id,),
+        source_filters=(tenant,),
+        aggregate=AggregateRule("sum", amount, "open_cents"),
+        group_by=(contract_id,),
+        max_rows=10,
+    )
+    if view != "open_invoices":
+        return (totals,)
+    selected = (
+        contract_id,
+        ColumnRef(view, "invoice_id"),
+        amount,
+        ColumnRef(view, "reference_key"),
+    )
+    rows = QueryDefinition(
+        "open.rows",
+        view,
+        selected,
+        source_filters=(tenant,),
+        order_by=selected,
+        max_rows=10,
+    )
+    return (rows, totals)
+
+
+def view_database(tmp_path: Path, script: str = VIEW_SCRIPT) -> Path:
+    path = create_database(tmp_path / "views.sqlite")
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(script)
+    finally:
+        connection.close()
+    return path
+
+
+def register_view(
+    path: Path, view: str, columns: tuple[str, ...]
+) -> SQLiteDatabaseExtension:
+    extension = SQLiteDatabaseExtension()
+    extension.register_database(
+        source(), path, allowed_columns={view: columns}, queries=view_queries(view)
+    )
+    return extension
+
+
+def test_sqlite_views_answer_row_and_aggregate_queries(tmp_path: Path) -> None:
+    path = view_database(tmp_path)
+    extension = register_view(
+        path,
+        "open_invoices",
+        ("invoice_id", "contract_id", "amount_cents", "tenant_id", "reference_key"),
+    )
+    nested = register_view(path, "open_amounts", VIEW_AMOUNT_COLUMNS)
+
+    rows = extension.run_tool(request("open.rows", {}), RetrievalContext())
+    totals = extension.run_tool(request("open.totals", {}), RetrievalContext())
+    nested_totals = nested.run_tool(request("open.totals", {}), RetrievalContext())
+    view_node = next(
+        node
+        for node in extension.iter_index_records(source(), IndexContext())
+        if node.kind == "database_table"
+    )
+
+    assert [
+        (
+            row["open_invoices__contract_id"],
+            row["open_invoices__invoice_id"],
+            row["open_invoices__amount_cents"],
+        )
+        for row in rows.value["rows"]
+    ] == OPEN_TENANT_A
+    assert rows.value["rows"][0]["open_invoices__reference_key"] == "nw-2026-01"
+    assert totals.value["rows"] == [
+        {"open_invoices__contract_id": 1, "open_cents": 220000},
+        {"open_invoices__contract_id": 2, "open_cents": 90000},
+    ]
+    assert nested_totals.value["rows"] == [
+        {"open_amounts__contract_id": 1, "open_cents": 220000},
+        {"open_amounts__contract_id": 2, "open_cents": 90000},
+    ]
+    assert view_node.attributes["object_kind"] == "view"
+    assert view_node.attributes["primary_key_columns"] == []
+    extension.close()
+    nested.close()
+
+
+def test_sqlite_view_rows_must_be_ordered_by_every_selected_column(
+    tmp_path: Path,
+) -> None:
+    view = "open_invoices"
+    partial = QueryDefinition(
+        "open.rows",
+        view,
+        (ColumnRef(view, "contract_id"), ColumnRef(view, "invoice_id")),
+        order_by=(ColumnRef(view, "contract_id"),),
+    )
+
+    with pytest.raises(InvalidDatabaseConfigurationError, match="primary key"):
+        SQLiteDatabaseExtension().register_database(
+            source(),
+            view_database(tmp_path),
+            allowed_columns={view: ("contract_id", "invoice_id")},
+            queries=(partial,),
+        )
+
+
+@pytest.mark.parametrize(
+    ("script", "reason"),
+    [
+        (
+            "CREATE VIEW leak AS SELECT name AS contract_id, sql AS amount_cents, "
+            "type AS tenant_id FROM sqlite_schema;",
+            "not an ordinary table or view",
+        ),
+        (
+            "CREATE VIEW leak AS SELECT cid AS contract_id, name AS amount_cents, "
+            "type AS tenant_id FROM pragma_table_info('invoices');",
+            "is not supported",
+        ),
+    ],
+)
+def test_sqlite_views_reading_the_schema_or_virtual_tables_are_refused(
+    tmp_path: Path, script: str, reason: str
+) -> None:
+    path = view_database(tmp_path, script)
+
+    with pytest.raises(DatabaseRegistrationError, match=reason):
+        register_view(path, "leak", VIEW_AMOUNT_COLUMNS)
+
+
+def test_sqlite_views_over_full_text_tables_are_refused(tmp_path: Path) -> None:
+    try:
+        path = view_database(
+            tmp_path,
+            "CREATE VIRTUAL TABLE notes USING fts5(body);"
+            "CREATE VIEW leak AS SELECT rowid AS contract_id, body AS amount_cents, "
+            "body AS tenant_id FROM notes;",
+        )
+    except sqlite3.OperationalError:
+        pytest.skip("this SQLite build has no FTS5")
+
+    with pytest.raises(DatabaseRegistrationError, match="is not supported"):
+        register_view(path, "leak", VIEW_AMOUNT_COLUMNS)
+
+
+def test_redefining_a_registered_sqlite_view_is_detected(tmp_path: Path) -> None:
+    path = view_database(tmp_path)
+    extension = register_view(path, "open_amounts", VIEW_AMOUNT_COLUMNS)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            "DROP VIEW open_amounts;"
+            "CREATE VIEW open_amounts AS "
+            "SELECT contract_id, amount_cents, tenant_id FROM invoices;"
+        )
+    finally:
+        connection.close()
+
+    with pytest.raises((DatabaseSchemaChangedError, DatabaseSourceChangedError)):
+        extension.run_tool(request("open.totals", {}), RetrievalContext())
     extension.close()
 
 

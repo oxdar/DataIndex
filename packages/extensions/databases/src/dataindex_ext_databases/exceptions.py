@@ -6,11 +6,11 @@ class DatabaseIndexError(Exception):
 
 
 class UnsupportedDatabaseSourceError(DatabaseIndexError):
-    """The source is not a supported SQLite database."""
+    """The source type is not a supported database."""
 
 
 class DatabaseRegistrationError(DatabaseIndexError):
-    """The host could not register an authorized SQLite source."""
+    """The host could not register an authorized database source."""
 
 
 class InvalidDatabaseConfigurationError(DatabaseIndexError):
@@ -26,7 +26,7 @@ class DatabaseSourceConflictError(DatabaseIndexError):
 
 
 class DatabaseSourceChangedError(DatabaseIndexError):
-    """The registered SQLite file identity changed without a new source version."""
+    """The registered file or schema state changed without a new source version."""
 
 
 class UnauthorizedDatabaseAccessError(DatabaseIndexError):
@@ -50,7 +50,7 @@ class DatabaseExecutionBudgetExceededError(DatabaseIndexError):
 
 
 class DatabaseQueryError(DatabaseIndexError):
-    """SQLite rejected or failed to execute an approved query."""
+    """The database rejected or failed to execute an approved query."""
 
 
 class DatabaseResultError(DatabaseIndexError):
@@ -63,3 +63,18 @@ class DatabaseResultTooLargeError(DatabaseIndexError):
 
 class ClosedDatabaseIndexError(DatabaseIndexError):
     """The database extension has been closed."""
+
+
+class InvalidDatabaseConnectionError(InvalidDatabaseConfigurationError):
+    """A connection URL, engine, schema or credential reference is not allowed."""
+
+
+class DatabaseDriverUnavailableError(DatabaseRegistrationError):
+    """The optional driver for a database engine is not installed."""
+
+
+class DatabaseConnectionError(DatabaseIndexError):
+    """A database server could not be reached, or it refused the credentials.
+
+    Messages name the redacted connection and never contain a password.
+    """

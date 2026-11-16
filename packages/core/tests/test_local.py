@@ -11,13 +11,19 @@ import pytest
 from dataindex import local
 from dataindex.exceptions import ConfigurationError
 from dataindex.local import (
+    BINARY_DOCUMENT_SUFFIXES,
+    DOCUMENT_SUFFIXES,
+    MAX_SUBMITTED_BINARY_FILE_BYTES,
     MAX_SUBMITTED_FILE_BYTES,
+    ConnectionRegistrar,
     DatabaseRegistrar,
     DocumentRegistrar,
     FileKind,
     LocalAuthorizer,
     classify_file,
+    connection_source_id,
     content_version,
+    database_file_type,
     first_party_plugins,
     free_capabilities,
     install_hint,
@@ -26,6 +32,8 @@ from dataindex.local import (
     resolve_submitted_path,
     resolve_trusted_plugins,
     source_id_for,
+    submitted_file_limit,
+    url_has_password,
 )
 from dataindex.models import HealthStatus, SourceRef
 from dataindex.registry import ExtensionRegistry, PluginStatus
@@ -493,9 +501,23 @@ def test_registrar_protocols_describe_what_local_mode_needs_from_plugins() -> No
         def unregister_database(self, source_id: str) -> int:
             return 0
 
+    class Servers(Databases):
+        def describe_connection(self, connection: dict) -> dict:
+            return {}
+
+        def connection_source_version(self, config: dict) -> str:
+            return "v1"
+
+        def register_connection_config(
+            self, source: SourceRef, config: dict, *, expected_state: str | None = None
+        ) -> str:
+            return "v1"
+
     assert isinstance(FakeDocumentsPlugin(), DocumentRegistrar)
     assert not isinstance(FakeDocumentsPlugin(), DatabaseRegistrar)
     assert isinstance(Databases(), DatabaseRegistrar)
+    assert not isinstance(Databases(), ConnectionRegistrar)
+    assert isinstance(Servers(), ConnectionRegistrar)
     assert not isinstance(BasicExtension(documents_manifest()), DocumentRegistrar)
     assert not isinstance(object(), DocumentRegistrar)
 
@@ -515,12 +537,50 @@ def test_registrar_protocols_describe_what_local_mode_needs_from_plugins() -> No
         ("a.htm", "text/html"),
         ("A.MD", "text/markdown"),
         ("Report.Final.TXT", "text/plain"),
+        ("notes.rst", "text/plain"),
+        ("config.yaml", "text/plain"),
+        ("page.xhtml", "text/html"),
+        ("report.pdf", "application/pdf"),
+        ("REPORT.PDF", "application/pdf"),
+        ("memo.doc", "application/msword"),
+        (
+            "memo.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        ("stock.xls", "application/vnd.ms-excel"),
+        (
+            "stock.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        ("deck.ppt", "application/vnd.ms-powerpoint"),
+        (
+            "deck.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+        ("memo.odt", "application/vnd.oasis.opendocument.text"),
+        ("stock.ods", "application/vnd.oasis.opendocument.spreadsheet"),
+        ("deck.odp", "application/vnd.oasis.opendocument.presentation"),
+        ("memo.rtf", "application/rtf"),
+        ("book.epub", "application/epub+zip"),
+        ("message.eml", "message/rfc822"),
+        ("table.csv", "text/csv"),
+        ("table.tsv", "text/tab-separated-values"),
+        ("data.json", "application/json"),
+        ("events.jsonl", "application/x-ndjson"),
+        ("events.ndjson", "application/x-ndjson"),
+        ("feed.xml", "application/xml"),
     ],
 )
 def test_document_suffixes_map_to_a_source_type_and_the_documents_plugin(
     filename: str, source_type: str
 ) -> None:
     assert classify_file(Path(filename)) == FileKind("document", source_type, "documents")
+
+
+def test_binary_document_suffixes_are_all_document_suffixes() -> None:
+    assert BINARY_DOCUMENT_SUFFIXES < set(DOCUMENT_SUFFIXES)
+    assert ".pdf" in BINARY_DOCUMENT_SUFFIXES
+    assert ".csv" not in BINARY_DOCUMENT_SUFFIXES
 
 
 @pytest.mark.parametrize("filename", ["a.sqlite", "a.sqlite3", "a.db", "A.DB", "data.2024.SQLite3"])
@@ -530,10 +590,66 @@ def test_sqlite_suffixes_map_to_the_databases_plugin(filename: str) -> None:
     )
 
 
-@pytest.mark.parametrize("filename", ["report.pdf", "REPORT.PDF"])
-def test_pdf_files_are_refused_as_unsupported_in_this_version(filename: str) -> None:
-    with pytest.raises(ConfigurationError, match="not supported in DataIndex v0.1.0"):
-        classify_file(Path(filename))
+@pytest.mark.parametrize("filename", ["a.duckdb", "a.ddb", "A.DuckDB"])
+def test_duckdb_suffixes_map_to_the_databases_plugin(filename: str) -> None:
+    assert classify_file(Path(filename)) == FileKind(
+        "database", "application/vnd.duckdb", "databases"
+    )
+
+
+DUCKDB_HEADER = b"\x00" * 8 + b"DUCK" + b"\x40\x00\x00\x00"
+
+
+@pytest.mark.parametrize(
+    ("filename", "header", "source_type"),
+    [
+        ("orders.db", DUCKDB_HEADER, "application/vnd.duckdb"),
+        ("orders.sqlite", DUCKDB_HEADER, "application/vnd.duckdb"),
+        ("orders.duckdb", b"SQLite format 3\x00", "application/vnd.sqlite3"),
+        ("orders.ddb", b"", "application/vnd.duckdb"),
+        ("orders.db", b"neither format", "application/vnd.sqlite3"),
+    ],
+)
+def test_database_files_are_identified_by_their_header_before_their_suffix(
+    tmp_path: Path, filename: str, header: bytes, source_type: str
+) -> None:
+    path = tmp_path / filename
+    path.write_bytes(header)
+
+    assert database_file_type(path) == source_type
+    assert classify_file(path) == FileKind("database", source_type, "databases")
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("postgresql+psycopg://reader@db:5432/sales", False),
+        ("postgresql+psycopg://reader:secret@db:5432/sales", True),
+        ("postgresql://:secret@db/sales", True),
+        ("mongodb://reader:s%40cret@a:27017,b:27017/app", True),
+        ("mongodb://reader@a:27017,b:27017/app?replicaSet=rs0", False),
+        ("snowflake://reader@acme-xy123/sales/public?warehouse=wh", False),
+        ("mssql+pyodbc://db.example.com:1433/sales?note=a:b@c", False),
+        ("bigquery://project/dataset", False),
+        ("no scheme:secret@host", False),
+    ],
+)
+def test_url_has_password_looks_only_at_the_user_information(
+    url: str, expected: bool
+) -> None:
+    assert url_has_password(url) is expected
+
+
+def test_connection_source_ids_are_stable_and_depend_on_the_url_and_schema() -> None:
+    url = "postgresql+psycopg://reader@db:5432/sales"
+
+    source_id = connection_source_id(url, None)
+
+    assert re.fullmatch(r"db-[0-9a-f]{16}", source_id)
+    assert connection_source_id(url, None) == source_id
+    assert connection_source_id(url, "public") != source_id
+    assert connection_source_id(url.replace("sales", "hr"), None) != source_id
+    assert "reader" not in source_id
 
 
 @pytest.mark.parametrize(
@@ -543,6 +659,7 @@ def test_pdf_files_are_refused_as_unsupported_in_this_version(filename: str) -> 
         ("archive.tar.gz", "'.gz'"),
         ("image.png", "'.png'"),
         ("notes.md.exe", "'.exe'"),
+        ("archive.zip", "'.zip'"),
         ("README", "(no extension)"),
         (".md", "(no extension)"),
     ],
@@ -555,7 +672,9 @@ def test_other_suffixes_are_refused_and_the_supported_ones_are_listed(
 
     assert shown in str(error.value)
     assert ".md" in str(error.value)
+    assert ".pdf" in str(error.value)
     assert ".sqlite3" in str(error.value)
+    assert ".duckdb" in str(error.value)
 
 
 def test_resolve_submitted_path_returns_the_absolute_path_of_a_file(
@@ -656,6 +775,44 @@ def test_read_submitted_file_refuses_one_byte_over_the_limit(tmp_path: Path) -> 
 
     assert "'big.txt'" in str(error.value)
     assert str(tmp_path) not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("filename", "limit"),
+    [
+        ("a.md", MAX_SUBMITTED_FILE_BYTES),
+        ("a.csv", MAX_SUBMITTED_FILE_BYTES),
+        ("a.json", MAX_SUBMITTED_FILE_BYTES),
+        ("a.PDF", MAX_SUBMITTED_BINARY_FILE_BYTES),
+        ("a.docx", MAX_SUBMITTED_BINARY_FILE_BYTES),
+        ("a.xls", MAX_SUBMITTED_BINARY_FILE_BYTES),
+        ("a.eml", MAX_SUBMITTED_BINARY_FILE_BYTES),
+    ],
+)
+def test_submitted_file_limit_depends_on_the_document_type(
+    filename: str, limit: int
+) -> None:
+    assert submitted_file_limit(Path(filename)) == limit
+
+
+def test_read_submitted_file_allows_binary_documents_above_the_text_limit(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"x" * (MAX_SUBMITTED_FILE_BYTES + 1))
+
+    assert len(read_submitted_file(path)) == MAX_SUBMITTED_FILE_BYTES + 1
+
+
+def test_read_submitted_file_refuses_binary_documents_over_their_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(local, "MAX_SUBMITTED_BINARY_FILE_BYTES", 2 * 1024 * 1024)
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+
+    with pytest.raises(ConfigurationError, match="larger than the 2 MiB limit"):
+        read_submitted_file(path)
 
 
 def test_read_submitted_file_of_a_missing_file_raises_file_not_found(tmp_path: Path) -> None:

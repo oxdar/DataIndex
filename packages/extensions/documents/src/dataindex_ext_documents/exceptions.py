@@ -9,12 +9,24 @@ class UnsupportedDocumentFormatError(DocumentIndexError):
     """The source MIME type is not supported by this extension."""
 
 
+class DocumentReaderUnavailableError(UnsupportedDocumentFormatError):
+    """The format is supported, but its optional parser package is not installed."""
+
+
 class DocumentTooLargeError(DocumentIndexError):
     """A source exceeds the configured document or section limit."""
 
 
 class InvalidDocumentEncodingError(DocumentIndexError):
-    """A source is not valid UTF-8 text."""
+    """A text source is not in a supported character encoding."""
+
+
+class MalformedDocumentError(DocumentIndexError):
+    """A source is not a valid file of its declared type."""
+
+
+class ProtectedDocumentError(DocumentIndexError):
+    """A source is encrypted, password-protected or DRM-protected."""
 
 
 class EmptyDocumentError(DocumentIndexError):

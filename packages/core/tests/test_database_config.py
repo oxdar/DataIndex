@@ -13,7 +13,9 @@ from dataindex.database_config import (
     MAX_SUMMARIZED_QUERIES,
     MAX_SUMMARY_TEXT_CHARS,
     config_digest,
+    database_state,
     database_version,
+    is_connection_config,
     normalize_database_config,
     query_summaries,
 )
@@ -380,6 +382,75 @@ def test_changing_what_was_approved_changes_the_source_version() -> None:
 
     assert len(set(versions.values())) == len(variants), versions
     assert versions["baseline"] == database_version("sha256:abc", approved())
+
+
+@pytest.mark.parametrize("state", ["sha256:abc", "postgresql-schema:0123abcd", "a+qb"])
+def test_database_state_recovers_the_state_part_of_a_version(state: str) -> None:
+    config = normalize_database_config(ALLOWED, [query()])
+
+    assert database_state(database_version(state, config)) == state
+
+
+# ---------------------------------------------------------------------------
+# normalize_database_config: database servers
+
+SERVER_URL = "postgresql+psycopg://reader@db.example.com:5432/sales"
+
+
+def test_a_server_configuration_keeps_the_connection_without_empty_fields() -> None:
+    config = normalize_database_config(
+        ALLOWED,
+        [query()],
+        connection={
+            "url": SERVER_URL,
+            "engine": "postgresql",
+            "schema": None,
+            "password_env": "DATAINDEX_SALES_PASSWORD",
+        },
+    )
+
+    assert config["connection"] == {
+        "engine": "postgresql",
+        "password_env": "DATAINDEX_SALES_PASSWORD",
+        "url": SERVER_URL,
+    }
+    assert list(config["connection"]) == ["engine", "password_env", "url"]  # type: ignore[arg-type]
+    assert is_connection_config(config)
+    assert not is_connection_config(normalize_database_config(ALLOWED, [query()]))
+    assert not is_connection_config(None)
+    assert not is_connection_config({"connection": SERVER_URL})
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        {},
+        {"engine": "postgresql"},
+        {"url": ""},
+        {"url": 5432},
+        {"url": SERVER_URL, 1: "x"},
+        {"url": "x" * 4097},
+        {"url": SERVER_URL, **{f"field{index}": "x" for index in range(8)}},
+        SERVER_URL,
+    ],
+    ids=["empty", "no-url", "empty-url", "number", "key", "long", "too-many", "string"],
+)
+def test_a_connection_needs_a_url_and_only_short_string_fields(connection: object) -> None:
+    with pytest.raises(ValueError, match="connection"):
+        normalize_database_config(ALLOWED, [query()], connection=connection)  # type: ignore[arg-type]
+
+
+def test_the_connection_is_part_of_the_approved_configuration() -> None:
+    def version(**connection: str) -> str:
+        config = normalize_database_config(ALLOWED, [query()], connection=connection)
+        return database_version("postgresql-schema:1", config)
+
+    assert version(url=SERVER_URL) == version(url=SERVER_URL)
+    assert version(url=SERVER_URL) != version(url=SERVER_URL, schema="sales")
+    assert version(url=SERVER_URL) != version(url=SERVER_URL.replace("sales", "hr"))
+    assert version(url=SERVER_URL) != version(
+        url=SERVER_URL, password_env="DATAINDEX_OTHER"
+    )
 
 
 # ---------------------------------------------------------------------------

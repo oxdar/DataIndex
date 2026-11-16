@@ -1,13 +1,34 @@
 .venv/
 **/.venv/
+.venv-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 **/.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Credentials and machine-local settings; keep example environment templates.
+.env
+.env.*
+!.env.example
+!.env.*.example
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local catalogs, uploaded sources, chat history, and the README's sample database.
 dataindex.sqlite
 dataindex.sqlite-*
 .dataindex/
 **/.dataindex/
+/contracts.sqlite
+/contracts.sqlite-*

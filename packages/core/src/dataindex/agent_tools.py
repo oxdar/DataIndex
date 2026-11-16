@@ -217,8 +217,8 @@ _MANAGEMENT_TOOLS: tuple[AgentTool, ...] = (
 )
 
 AGENT_INSTRUCTIONS = (
-    "You answer questions from the documents and SQLite databases the user "
-    "submitted to DataIndex, and you read them only with the provided tools.\n"
+    "You answer questions from the documents and databases the user submitted "
+    "to DataIndex, and you read them only with the provided tools.\n"
     "1. Call list_documents to see what is available. Only documents whose "
     'status is "completed" can be read.\n'
     "2. For a document, call get_tree to see its sections, then get_section for "

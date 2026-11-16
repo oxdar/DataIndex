@@ -21,12 +21,23 @@ from dataindex.exceptions import (
     SourceAuthorizationError,
     ToolNotAvailableError,
 )
+from dataindex.local import (
+    BINARY_DOCUMENT_SUFFIXES,
+    DOCUMENT_SUFFIXES,
+    MAX_SUBMITTED_BINARY_FILE_BYTES,
+    MAX_SUBMITTED_FILE_BYTES,
+)
 from dataindex.models import EvidenceRecord, SourceRef, ToolRequest
 from dataindex.reasoning import PlannedToolCall
 from dataindex.registry import ExtensionRegistry
 from dataindex.sdk import DataIndexClient
 
-MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+MAX_DOCUMENT_BYTES = MAX_SUBMITTED_FILE_BYTES
+MAX_BINARY_DOCUMENT_BYTES = MAX_SUBMITTED_BINARY_FILE_BYTES
+DOCUMENT_SOURCE_TYPES = tuple(dict.fromkeys(DOCUMENT_SUFFIXES.values()))
+_BINARY_SOURCE_TYPES = frozenset(
+    DOCUMENT_SUFFIXES[suffix] for suffix in BINARY_DOCUMENT_SUFFIXES
+)
 
 
 class _LocalAuthorizer:
@@ -112,7 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
         document_parser.add_argument(
             "--source-type",
             required=True,
-            choices=("text/markdown", "text/plain", "text/html"),
+            choices=DOCUMENT_SOURCE_TYPES,
         )
         document_parser.add_argument("--file", required=True, type=Path)
         document_parser.add_argument("--trusted-distribution", required=True)
@@ -229,7 +240,7 @@ def _nodes(args: argparse.Namespace) -> int:
 def _document_operation(args: argparse.Namespace) -> int:
     if not args.enable_plugin:
         raise ValueError("pass --enable-plugin to explicitly enable documents")
-    content = _read_document(args.file)
+    content = _read_document(args.file, args.source_type)
     source = SourceRef(
         source_id=args.source_id,
         source_type=args.source_type,
@@ -284,13 +295,16 @@ def _document_operation(args: argparse.Namespace) -> int:
     return 0
 
 
-def _read_document(path: Path) -> bytes:
+def _read_document(path: Path, source_type: str) -> bytes:
+    limit = (
+        MAX_BINARY_DOCUMENT_BYTES
+        if source_type in _BINARY_SOURCE_TYPES
+        else MAX_DOCUMENT_BYTES
+    )
     with path.open("rb") as document:
-        content = document.read(MAX_DOCUMENT_BYTES + 1)
-    if len(content) > MAX_DOCUMENT_BYTES:
-        raise ValueError(
-            f"document exceeds the {MAX_DOCUMENT_BYTES}-byte CLI limit"
-        )
+        content = document.read(limit + 1)
+    if len(content) > limit:
+        raise ValueError(f"document exceeds the {limit}-byte CLI limit")
     if not content:
         raise ValueError("document is empty")
     return content

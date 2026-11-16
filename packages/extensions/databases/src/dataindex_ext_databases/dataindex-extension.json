@@ -10,6 +10,16 @@
     "database.query"
   ],
   "source_types": [
+    "application/vnd.dataindex.db.bigquery",
+    "application/vnd.dataindex.db.clickhouse",
+    "application/vnd.dataindex.db.mariadb",
+    "application/vnd.dataindex.db.mongodb",
+    "application/vnd.dataindex.db.mssql",
+    "application/vnd.dataindex.db.mysql",
+    "application/vnd.dataindex.db.oracle",
+    "application/vnd.dataindex.db.postgresql",
+    "application/vnd.dataindex.db.snowflake",
+    "application/vnd.duckdb",
     "application/vnd.sqlite3",
     "application/x-sqlite3"
   ],

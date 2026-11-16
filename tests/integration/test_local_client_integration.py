@@ -484,7 +484,7 @@ def test_documents_and_databases_cannot_be_submitted_through_the_wrong_method(
     database = make_database(tmp_path / "dbs")
     with client_for(tmp_path, chat=None) as client:
         with pytest.raises(
-            ConfigurationError, match="is a SQLite database; submit it with submit_database"
+            ConfigurationError, match="is a database file; submit it with submit_database"
         ):
             client.submit_document(database)
         with pytest.raises(

@@ -1,3 +1,10 @@
-# The runtime API dependency is bounded in pyproject.toml:
+# Runtime dependencies are bounded in pyproject.toml:
 # dataindex-core>=0.1,<0.2
-# No additional runtime packages are required.
+# Markdown, text, HTML, CSV/TSV, JSON/JSON Lines, XML, Office Open XML
+# (.docx/.xlsx/.pptx), OpenDocument, RTF, EPUB and email use only the Python
+# standard library.
+#
+# Optional extras, each BSD-licensed and imported only when that format is read:
+# pdf:            pypdf>=7.1.0,<8
+# legacy-office:  olefile>=0.47,<1  (.doc, .ppt)
+#                 xlrd>=2.0.2,<3    (.xls)

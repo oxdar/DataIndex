@@ -86,7 +86,8 @@ database submission and agent tool exports.
    `--model`/`DATAINDEX_MODEL`. The earlier `index`/`query` catalog commands keep
    their explicit trust flags. There is no `--trust`, `--tenant`, `--api-key` or
    SQL flag.
-10. **Documented differences from PageIndex.** No PDF/OCR, page-based tree,
+10. **Documented differences from PageIndex.** No OCR (PDF is supported through
+    the documents extension's optional parser extra), page-based tree,
     LLM-built tree or summaries, streaming, message-list chat, `index=`
     argument, cloud mode, folders or metadata queries, `document_context` /
     `folder_context` helpers or MCP export. `wait` on `submit_document` is

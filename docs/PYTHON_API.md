@@ -94,29 +94,52 @@ with DataIndexClient("gpt-4o") as client:
 
 ### Submitting and inspecting
 
-- `submit_document(path, *, name=None, wait=True)` indexes a Markdown (`.md`,
-  `.markdown`), text (`.txt`, `.text`) or HTML (`.htm`, `.html`) file of at most
-  5 MiB and returns `{"doc_id", "name", "status": "completed", "change",
+- `submit_document(path, *, name=None, wait=True)` indexes a supported document
+  suffix listed in the [documents extension README](../packages/extensions/documents/README.md#supported-formats).
+  Text input is limited to 5 MiB and binary input to 50 MiB. PDF and the legacy
+  `.doc`, `.xls` and `.ppt` readers require the corresponding optional extras;
+  without one, submission reports its installation hint. It returns
+  `{"doc_id", "name", "status": "completed", "change",
   "source_type", "version", "node_count"}`. `change` is `"new"`, `"updated"` or
   `"unchanged"`: the ID is derived from the absolute path (`doc-<16 hex>`), so
   resubmitting is idempotent. Indexing is synchronous; `wait` exists only for
   PageIndex compatibility and has no effect. A name already used by another
   document gets a `_1`, `_2`, ... suffix before the extension (up to 99) and a
-  `UserWarning`. PDF files raise `ConfigurationError`: PDF is not supported in
-  v0.1.0.
-- `submit_database(path, *, allowed_columns, queries, name=None)` registers a
-  SQLite file (`.sqlite`, `.sqlite3`, `.db`) with the typed read-only queries
-  you approve and returns the same shape with `db-<16 hex>`. `queries` holds
-  `QueryDefinition` objects or their `to_mapping()` dictionaries; the approved
-  configuration is stored as JSON (at most 256 KiB) and is part of the source
+  `UserWarning`.
+- `submit_database(path=None, *, allowed_columns, queries, name=None, url=None,
+  password_env=None, schema=None)` registers a database with the typed
+  read-only queries you approve and returns the same shape with `db-<16 hex>`.
+  Pass exactly one of `path` or `url`:
+  - `path` is a SQLite or DuckDB file (`.sqlite`, `.sqlite3`, `.db`, `.duckdb`,
+    `.ddb`; the file header decides which engine). DuckDB needs the
+    `dataindex-ext-databases[duckdb]` extra.
+  - `url` is a database server without a password, such as
+    `postgresql://reader@db.example.com/sales`. Put the password in an
+    environment variable whose name starts with `DATAINDEX_` and pass that name
+    as `password_env`; a URL that contains a password raises `ValueError`.
+    `schema` selects a schema where the engine has them. Engines, URL formats
+    and their driver extras are listed in the
+    [databases extension README](../packages/extensions/databases/README.md#supported-engines).
+    The ID is derived from the password-free URL and schema, so resubmitting
+    the same server is idempotent. Submitting contacts the server. An invalid
+    URL, missing driver, unset password variable or unreachable server raises
+    `SourceRejectedError` with the plugin's (password-free) message; a missing
+    or outdated databases plugin raises `ConfigurationError`.
+
+  `queries` holds `QueryDefinition` objects or their `to_mapping()`
+  dictionaries; the approved configuration (with the password-free connection
+  for servers) is stored as JSON (at most 256 KiB) and is part of the source
   version. There is no raw SQL entry point.
 - `get_document(doc_id)` returns `{"id", "doc_id", "name", "description",
   "status", "createdAt", "kind", "source_type", "plugin_id", "version",
   "path"}` plus `detail` when the status is not `completed`, and a whitelisted
-  `queries` summary for databases. `status` is `completed`, `stale` (the file
-  changed after submission), `missing` or `unavailable` (for example the plugin
-  is not installed). `path` is for the local user; it is never shown to agents
-  or sent to a model.
+  `queries` summary for databases. A database server has `path: null` and a
+  `connection` object with `engine`, `url` and, when set, `schema` and
+  `password_env` (the variable name, never its value). `status` is
+  `completed`, `stale` (the file, or a server's schema, changed after
+  submission), `missing` or `unavailable` (for example the plugin is not
+  installed, or a server cannot be reached). `path` is for the local user; it
+  is never shown to agents or sent to a model.
 - `list_documents(limit=50, offset=0)` returns `{"documents", "total", "limit",
   "offset"}`, newest first, with `1 <= limit <= 100`.
 - `get_document_id(name)` returns the ID for an exact name or raises
@@ -149,8 +172,14 @@ re-checks the file against the version recorded at submission, so edited content
 is never served from an old index; `get_document` and `list_documents` report
 the same condition as `stale`. If a plugin release changes how a file is
 indexed, an unchanged file keeps its old nodes until you delete and resubmit it.
-A live SQLite database whose file keeps changing (for example in WAL mode) needs
-resubmitting after each change.
+A live SQLite or DuckDB database whose file keeps changing (for example in WAL
+mode) needs resubmitting after each change. A database server is different: its
+version follows the reflected schema of the allowlisted tables and views (a
+view's columns, not its SQL text), not the rows,
+so queries always read current rows and each result carries its read
+timestamp. Listing, opening or querying a server source reflects its schema
+again, which takes a round trip to the server; a schema change reports `stale`
+until you resubmit.
 
 ### Chat
 
@@ -246,19 +275,24 @@ PageIndex helpers such as `document_context`, `folder_context` and the
 
 ## Catalog CLI and local mode CLI
 
-The `dataindex` command has two families of subcommands. Both operate only on
-local files and never accept SQL text.
+The `dataindex` command has two families of subcommands. They never accept SQL
+text; apart from `submit-db --url` and `chat`, which contact a database server
+or the configured model, they operate only on local files.
 
 ### Local mode commands
 
-`dataindex submit PATH`, `submit-db PATH --config FILE`, `documents
+`dataindex submit PATH`, `submit-db PATH --config FILE`, `submit-db --url URL
+[--password-env NAME] [--schema NAME] --config FILE`, `documents
 list|get|tree|section|delete` and `chat [QUESTION]` mirror the Python methods
 above. They share `--storage DIR` (default `./.dataindex`) and, for output,
 `--json`. A `DOC` argument is an ID or an exact name, and an ID wins. `chat`
 takes `--doc DOC` (repeatable), `--model NAME` (or `DATAINDEX_MODEL`) and
 `--instructions TEXT`. Without a question it reads one per line from standard
-input; each question is independent. The `--config` file must be a JSON object
-with exactly `allowed_columns` and `queries`, at most 256 KiB;
+input; each question is independent. `submit-db` takes exactly one of `PATH`
+or `--url`; `--password-env` names the `DATAINDEX_*` variable that holds the
+server password, which is never passed on the command line. The `--config`
+file must be a JSON object with exactly `allowed_columns` and `queries`, at
+most 256 KiB;
 [examples/contracts_database_config.json](../examples/contracts_database_config.json)
 is a sample. Exit codes are 0 for success (an abstained answer is a success), 2
 for a handled error and 130 for Ctrl+C. Messages are sanitized before display.
@@ -272,8 +306,9 @@ There is no `--trust`, `--tenant` or `--api-key` flag: trust follows
 source references. `dataindex nodes search` performs bounded catalog metadata
 search and requires a tenant and source ID.
 
-`dataindex index` and `dataindex query` support explicit local Markdown, plain
-text and HTML documents up to 5 MiB. Both commands require
+`dataindex index` and `dataindex query` support the document suffixes listed in
+the extension README, with 5 MiB text and 50 MiB binary limits. Formats that
+need optional parser extras must have those extras installed. Both commands require
 `--trusted-distribution`, `--trusted-version` and `--enable-plugin`. The source
 revision is a SHA-256 digest of the supplied file bytes. `query` requires the
 same file and rejects stale content. Retrieval returns one section with source
@@ -290,6 +325,6 @@ command; databases are submitted through local mode with approved queries.
 The public extension API is currently `0.1`. The supported core runtime floor
 is Python 3.11. `dataindex-llm` follows the same 0.1 line and depends on
 `dataindex-core>=0.1,<0.2`. This v0.1.0 candidate does not include hosted
-authentication, plugin isolation, a production entitlement service, PDF/OCR, or
+authentication, plugin isolation, a production entitlement service, OCR, or
 production BIM/CAD/Subsurface extensions. The release is blocked until
 maintainers approve the unresolved license and earlier phase review gates.

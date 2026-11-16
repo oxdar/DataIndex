@@ -2,7 +2,13 @@
 
 ## 0.1.0
 
-- Initial free DocumentIndex extension for Markdown, plain text and HTML.
+- Added native-structure readers for PDF, legacy and Open XML Office files,
+  OpenDocument, RTF, EPUB, EML, CSV, TSV, JSON, JSON Lines and XML, alongside
+  Markdown, plain text and HTML.
+- Added optional `pdf`, `legacy-office` and `all` extras; formats that need
+  optional parsers report install hints while other readers remain available.
+- Added per-format size limits and deterministic bounds for PDF extraction,
+  archive inflation, markup, email parts, delimited rows and native sections.
 - Added the `documents.get_section` tool (one section by outline `node_id`) and
   `unregister_document(source_id)`, which the local-mode SDK uses to read
   sections and to forget deleted documents.

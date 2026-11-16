@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataIndex chat</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Chats and documents">
+      <div class="brand">DataIndex</div>
+      <button type="button" id="new-chat" class="primary">+ New chat</button>
+
+      <section class="panel chats">
+        <h2>Chats</h2>
+        <ul id="conversations" class="list"></ul>
+        <p id="no-conversations" class="empty">No saved chats yet.</p>
+      </section>
+
+      <section class="panel documents">
+        <div class="panel-head">
+          <h2>Documents</h2>
+          <span class="head-actions">
+            <button type="button" id="connect" class="button small">Connect</button>
+            <label class="button small" for="upload">Upload</label>
+          </span>
+          <input type="file" id="upload" multiple hidden>
+        </div>
+        <p class="hint">Tick documents to limit a question. With none ticked, all are searched.</p>
+        <ul id="documents" class="list"></ul>
+        <p id="no-documents" class="empty">No documents yet. Upload a document, PDF, office file or data file, or connect a database.</p>
+      </section>
+
+      <footer id="model-info" class="model-info"></footer>
+    </aside>
+
+    <main class="chat">
+      <header class="chat-head">
+        <h1 id="chat-title">New chat</h1>
+      </header>
+      <div id="messages" class="messages" aria-live="polite">
+        <div id="welcome" class="welcome">
+          <h2>Ask about your documents</h2>
+          <p>Answers cite the exact sections they come from. Chats are saved on this computer.</p>
+        </div>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="question" rows="3" placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)" required></textarea>
+        <button type="submit" id="send" class="primary">Send</button>
+      </form>
+      <p class="note">Each question is answered on its own from your documents; earlier messages in the chat are not sent to the model.</p>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="connect-dialog" class="dialog" aria-labelledby="connect-title">
+    <form id="connect-form">
+      <h2 id="connect-title">Connect a database</h2>
+      <p class="dialog-note">DataIndex indexes the schema of the tables and views you approve and runs only the approved queries. Use a read-only account. Passwords are never typed here: set the variable in the terminal before starting dataindex-ui.</p>
+      <label for="connect-url">Connection URL, without a password</label>
+      <input id="connect-url" type="text" required maxlength="2048" autocomplete="off" spellcheck="false" placeholder="postgresql+psycopg://reader@db.example.com:5432/sales">
+      <label for="connect-password-env">Password environment variable (optional)</label>
+      <input id="connect-password-env" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="DATAINDEX_SALES_PASSWORD">
+      <div class="dialog-row">
+        <span>
+          <label for="connect-schema">Schema (optional)</label>
+          <input id="connect-schema" type="text" maxlength="128" autocomplete="off" spellcheck="false">
+        </span>
+        <span>
+          <label for="connect-name">Name (optional)</label>
+          <input id="connect-name" type="text" maxlength="200" autocomplete="off">
+        </span>
+      </div>
+      <label for="connect-config">Approved tables, views and queries (the JSON of a <code>dataindex submit-db --config</code> file)</label>
+      <textarea id="connect-config" rows="8" required spellcheck="false" placeholder='{"allowed_columns": {"orders": ["region", "total"]}, "queries": [...]}'></textarea>
+      <p id="connect-error" class="dialog-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="connect-cancel" class="button secondary">Cancel</button>
+        <button type="submit" id="connect-submit" class="primary">Connect</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/static/app.js"></script>
+</body>
+</html>

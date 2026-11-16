@@ -29,17 +29,17 @@ from dataindex_ext_documents.exceptions import (
     ClosedDocumentIndexError,
     DocumentDeadlineExceededError,
     DocumentNotRegisteredError,
+    DocumentReaderUnavailableError,
     DocumentSectionNotFoundError,
     DocumentSourceConflictError,
     InvalidDocumentToolRequestError,
     NoDocumentMatchError,
     UnsupportedDocumentFormatError,
 )
+from dataindex_ext_documents.formats import FORMATS_BY_SOURCE_TYPE, SOURCE_TYPES
 from dataindex_ext_documents.readers import (
     MAX_QUERY_LENGTH,
-    SUPPORTED_SOURCE_TYPES,
     IndexedDocument,
-    decode_document,
     locator_key,
     parse_document,
 )
@@ -60,7 +60,7 @@ _MANIFEST = ExtensionManifest(
     edition="free",
     license_mode="none",
     capabilities=("document.index", "document.retrieve"),
-    source_types=("text/markdown", "text/plain", "text/html"),
+    source_types=SOURCE_TYPES,
     publisher="DataIndex project",
 )
 
@@ -120,7 +120,9 @@ class DocumentIndexExtension(DataIndexExtension):
 
     The host reads only authorized sources and passes their bytes to
     ``register_document``. This extension never interprets source IDs as paths
-    and performs no filesystem or network access.
+    and performs no filesystem or network access. Formats that need an optional
+    parser (PDF and the 97-2003 Office formats) are reported as unsupported by
+    ``probe`` until that parser is installed.
     """
 
     def __init__(self) -> None:
@@ -132,9 +134,17 @@ class DocumentIndexExtension(DataIndexExtension):
 
     def probe(self, source: SourceRef) -> ProbeResult:
         self._ensure_open()
-        if source.source_type not in SUPPORTED_SOURCE_TYPES:
+        spec = FORMATS_BY_SOURCE_TYPE.get(source.source_type)
+        if spec is None:
             return ProbeResult(
                 False, f"unsupported document source type {source.source_type!r}"
+            )
+        missing = spec.missing_modules()
+        if missing:
+            return ProbeResult(
+                False,
+                f"{spec.label} files need the optional {', '.join(missing)} "
+                f"package; install it with: {spec.install_hint()}",
             )
         return ProbeResult(True)
 
@@ -142,13 +152,20 @@ class DocumentIndexExtension(DataIndexExtension):
         self._ensure_open()
         probe = self.probe(source)
         if not probe.supported:
-            raise UnsupportedDocumentFormatError(probe.reason or "unsupported format")
-        text = decode_document(content)
-        parsed = parse_document(source, text)
+            error = (
+                DocumentReaderUnavailableError
+                if source.source_type in FORMATS_BY_SOURCE_TYPE
+                else UnsupportedDocumentFormatError
+            )
+            raise error(probe.reason or "unsupported format")
+        parsed = parse_document(source, content)
         key = (source.source_id, source.version)
         existing = self._documents.get(key)
         if existing is not None:
-            if existing.content != text or existing.source.source_type != source.source_type:
+            if (
+                existing.digest != parsed.digest
+                or existing.source.source_type != source.source_type
+            ):
                 raise DocumentSourceConflictError(
                     "the same source ID/version was registered with different content"
                 )

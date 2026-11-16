@@ -10,6 +10,8 @@ imports plugin packages.
 The workspace stores each file's absolute path and the version that was indexed.
 Before every use the file is checked again, so a document that changed after it
 was submitted is reported as stale instead of being answered from old content.
+A database server is stored by its password-free URL; before every use its
+allowlisted schema is reflected again and compared with the submitted one.
 """
 
 from __future__ import annotations
@@ -27,7 +29,9 @@ from dataindex._json import locator_json, plain_json
 from dataindex.answers import ChatAnswer, abstained_answer, build_chat_answer
 from dataindex.catalog import MAX_SOURCE_NODE_LIMIT, SQLiteCatalog
 from dataindex.database_config import (
+    database_state,
     database_version,
+    is_connection_config,
     normalize_database_config,
     query_summaries,
 )
@@ -48,19 +52,23 @@ from dataindex.llm import (
     validate_instructions,
 )
 from dataindex.local import (
+    CONNECTION_SOURCE_TYPE_PREFIX,
     DATABASES_PLUGIN_ID,
     DOCUMENTS_PLUGIN_ID,
-    MAX_SUBMITTED_FILE_BYTES,
+    ConnectionRegistrar,
     DatabaseRegistrar,
     DocumentRegistrar,
     LocalAuthorizer,
     classify_file,
+    connection_source_id,
     content_version,
     free_capabilities,
     install_hint,
     read_submitted_file,
     resolve_submitted_path,
     source_id_for,
+    submitted_file_limit,
+    url_has_password,
 )
 from dataindex.models import (
     EvidenceRecord,
@@ -116,6 +124,15 @@ STATUS_STALE = "stale"
 STATUS_MISSING = "missing"
 STATUS_UNAVAILABLE = "unavailable"
 _MISSING_DETAIL = "file is missing; restore it or delete the document"
+_UNREACHABLE_DETAIL = (
+    "the database server could not be checked; make sure it is reachable, its "
+    "driver is installed and its password environment variable is set"
+)
+_PASSWORD_IN_URL = (
+    "connection URLs must not contain a password; store it in an environment "
+    "variable named DATAINDEX_... and pass password_env"
+)
+_CONNECTION_FIELDS = ("engine", "url", "schema", "password_env")
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +196,7 @@ class LocalRuntime:
         kind = classify_file(resolved)
         if kind.kind != "document":
             raise ConfigurationError(
-                f"{resolved.name!r} is a SQLite database; submit it with "
+                f"{resolved.name!r} is a database file; submit it with "
                 "submit_database(path, allowed_columns=..., queries=...)"
             )
         content = read_submitted_file(resolved)
@@ -218,15 +235,32 @@ class LocalRuntime:
 
     def submit_database(
         self,
-        path: str | os.PathLike[str],
+        path: str | os.PathLike[str] | None = None,
         *,
         allowed_columns: Mapping[str, Sequence[str]],
         queries: Sequence[object],
         name: str | None = None,
+        url: str | None = None,
+        password_env: str | None = None,
+        schema: str | None = None,
     ) -> dict[str, JsonValue]:
         self._ensure_open()
         if name is not None:
             validate_document_name(name)
+        if (path is None) == (url is None):
+            raise ValueError(
+                "pass exactly one of a database file path or a connection url"
+            )
+        if url is not None:
+            return self._submit_connection(
+                _connection_request(url, password_env, schema),
+                allowed_columns,
+                queries,
+                name,
+            )
+        if password_env is not None or schema is not None:
+            raise ValueError("password_env and schema apply only to a connection url")
+        assert path is not None
         resolved = resolve_submitted_path(path)
         kind = classify_file(resolved)
         if kind.kind != "database":
@@ -269,6 +303,61 @@ class LocalRuntime:
         except BaseException:
             if existing is None:
                 self._discard(doc_id, kind.kind)
+            raise
+        self._ready[doc_id] = source
+        return self._submitted(doc_id, display_name, source, existing, node_count)
+
+    def _submit_connection(
+        self,
+        connection: dict[str, object],
+        allowed_columns: Mapping[str, Sequence[str]],
+        queries: Sequence[object],
+        name: str | None,
+    ) -> dict[str, JsonValue]:
+        """Register a database server; only its password-free form is stored."""
+        registrar, manifest = self._connections_plugin()
+        # The raw URL is not echoed: until the plugin validates it, its query
+        # string could hold a credential.
+        with _rejecting("the database connection", quote=False):
+            described = registrar.describe_connection(connection)
+        canonical, source_type, label = _described_connection(described)
+        config = normalize_database_config(
+            allowed_columns, queries, connection=canonical
+        )
+        url = canonical["url"]
+        schema = canonical.get("schema")
+        assert isinstance(url, str)
+        doc_id = connection_source_id(url, schema if isinstance(schema, str) else None)
+        existing = self._existing_for_submit(doc_id)
+        with _rejecting(label):
+            state = registrar.connection_source_version(config)
+        source = SourceRef(doc_id, source_type, database_version(state, config))
+        display_name = self._unique_name(
+            name
+            if name is not None
+            else (existing.name if existing is not None else label),
+            doc_id,
+        )
+        self._ready.pop(doc_id, None)
+        try:
+            node_count = self._activate_connection(
+                registrar, manifest, source, config, label
+            )
+            self._workspace.upsert(
+                WorkspaceDocument(
+                    doc_id=doc_id,
+                    name=display_name,
+                    kind="database",
+                    source_type=source_type,
+                    plugin_id=DATABASES_PLUGIN_ID,
+                    path=url,
+                    version=source.version,
+                    config=config,
+                )
+            )
+        except BaseException:
+            if existing is None:
+                self._discard(doc_id, "database")
             raise
         self._ready[doc_id] = source
         return self._submitted(doc_id, display_name, source, existing, node_count)
@@ -568,6 +657,12 @@ class LocalRuntime:
                 self._activate_document(
                     registrar, manifest, source, state.content, row.name
                 )
+            elif row.kind == "database" and is_connection_config(row.config):
+                assert isinstance(row.config, Mapping)
+                server, manifest = self._connections_plugin()
+                self._activate_connection(
+                    server, manifest, source, row.config, row.name
+                )
             elif row.kind == "database" and isinstance(row.config, Mapping):
                 database, manifest = self._databases_plugin()
                 self._activate_database(
@@ -583,13 +678,15 @@ class LocalRuntime:
     def _inspect(
         self, row: WorkspaceDocument, availability: dict[str, str | None]
     ) -> _Inspection:
-        """Compare the file on disk with what was submitted, then check its plugin.
+        """Compare the source with what was submitted, then check its plugin.
 
-        The file is checked first so a missing or changed file is reported even
-        when its plugin is also unavailable.
+        A file is checked first so a missing or changed file is reported even
+        when its plugin is also unavailable. A database server can only be
+        checked through the plugin, which reflects its current schema.
         """
         plugin_id = _PLUGIN_FOR_KIND[row.kind]
         content: bytes | None = None
+        server = row.kind == "database" and is_connection_config(row.config)
         if row.kind == "document":
             try:
                 content = read_submitted_file(resolve_submitted_path(row.path))
@@ -599,15 +696,15 @@ class LocalRuntime:
                 return _Inspection(
                     STATUS_STALE,
                     "file could not be read or is larger than "
-                    f"{MAX_SUBMITTED_FILE_BYTES // (1024 * 1024)} MiB; fix it and "
-                    "submit it again",
+                    f"{submitted_file_limit(Path(row.path)) // (1024 * 1024)} MiB; "
+                    "fix it and submit it again",
                 )
             if content_version(content) != row.version:
                 return _Inspection(
                     STATUS_STALE,
                     "file changed after it was submitted; submit it again",
                 )
-        else:
+        elif not server:
             try:
                 present = Path(row.path).is_file()
             except (OSError, ValueError):
@@ -619,9 +716,32 @@ class LocalRuntime:
         problem = availability[plugin_id]
         if problem is not None:
             return _Inspection(STATUS_UNAVAILABLE, problem)
+        if server:
+            return self._inspect_connection(row)
         if row.kind == "database":
             return self._inspect_database(row)
         return _Inspection(STATUS_COMPLETED, content=content)
+
+    def _inspect_connection(self, row: WorkspaceDocument) -> _Inspection:
+        assert isinstance(row.config, Mapping)
+        extension = self._extension(DATABASES_PLUGIN_ID)
+        if not isinstance(extension, ConnectionRegistrar):
+            return _Inspection(STATUS_UNAVAILABLE, _too_old(DATABASES_PLUGIN_ID))
+        try:
+            version = database_version(
+                extension.connection_source_version(row.config), row.config
+            )
+        except Exception:
+            # The plugin's message may name the server; the fixed text is shown
+            # instead because list_documents details reach the chat model.
+            return _Inspection(STATUS_UNAVAILABLE, _UNREACHABLE_DETAIL)
+        if version != row.version:
+            return _Inspection(
+                STATUS_STALE,
+                "database schema or approved queries changed after it was "
+                "submitted; submit it again",
+            )
+        return _Inspection(STATUS_COMPLETED)
 
     def _inspect_database(self, row: WorkspaceDocument) -> _Inspection:
         if not isinstance(row.config, Mapping):
@@ -637,8 +757,8 @@ class LocalRuntime:
         except Exception:
             return _Inspection(
                 STATUS_STALE,
-                "file could not be opened as a SQLite database; fix it and "
-                "submit it again",
+                "file could not be opened as a database; fix it and submit it "
+                "again",
             )
         if version != row.version:
             return _Inspection(
@@ -684,6 +804,30 @@ class LocalRuntime:
         except Exception:
             current = None
         if current != source.version:
+            with suppress(Exception):
+                registrar.unregister_database(source.source_id)
+            raise SourceFileChangedError(
+                f"{label!r} changed while it was being registered; try again"
+            )
+        self._authorizer.grant(source, free_capabilities(manifest))
+        self._client.register_source(source)
+        return self._index(source, DATABASES_PLUGIN_ID, label)
+
+    def _activate_connection(
+        self,
+        registrar: ConnectionRegistrar,
+        manifest: ExtensionManifest,
+        source: SourceRef,
+        config: Mapping[str, JsonValue],
+        label: str,
+    ) -> int:
+        expected = database_state(source.version)
+        with _rejecting(label):
+            registrar.unregister_database(source.source_id)
+            state = registrar.register_connection_config(
+                source, config, expected_state=expected
+            )
+        if state != expected:
             with suppress(Exception):
                 registrar.unregister_database(source.source_id)
             raise SourceFileChangedError(
@@ -739,6 +883,12 @@ class LocalRuntime:
     def _databases_plugin(self) -> tuple[DatabaseRegistrar, ExtensionManifest]:
         extension = self._extension(DATABASES_PLUGIN_ID)
         if not isinstance(extension, DatabaseRegistrar):
+            raise ConfigurationError(_too_old(DATABASES_PLUGIN_ID))
+        return extension, extension.manifest()
+
+    def _connections_plugin(self) -> tuple[ConnectionRegistrar, ExtensionManifest]:
+        extension = self._extension(DATABASES_PLUGIN_ID)
+        if not isinstance(extension, ConnectionRegistrar):
             raise ConfigurationError(_too_old(DATABASES_PLUGIN_ID))
         return extension, extension.manifest()
 
@@ -871,6 +1021,9 @@ class LocalRuntime:
             "version": row.version,
             "path": row.path,
         }
+        if row.kind == "database" and is_connection_config(row.config):
+            info["path"] = None
+            info["connection"] = _connection_view(row.config)
         if state.status != STATUS_COMPLETED and state.detail is not None:
             info["detail"] = state.detail
         if row.kind == "database":
@@ -919,19 +1072,20 @@ class LocalRuntime:
 
 
 @contextmanager
-def _rejecting(label: str) -> Generator[None, None, None]:
+def _rejecting(label: str, *, quote: bool = True) -> Generator[None, None, None]:
     """Report a plugin failure as a rejected file.
 
     DataIndex errors and resource exhaustion pass through unchanged. The message
     is for the local user only and is never sent to a model.
     """
+    subject = repr(label) if quote else label
     try:
         yield
     except (DataIndexError, MemoryError, RecursionError):
         raise
     except Exception as error:
         raise SourceRejectedError(
-            f"{label!r} was rejected: {error}", error_type=type(error).__name__
+            f"{subject} was rejected: {error}", error_type=type(error).__name__
         ) from error
 
 
@@ -945,6 +1099,68 @@ def _too_old(plugin_id: str) -> str:
 def _require_doc_id(doc_id: object) -> None:
     if not isinstance(doc_id, str) or not doc_id:
         raise ValueError("doc_id must be a non-empty string")
+
+
+def _connection_request(
+    url: object, password_env: object, schema: object
+) -> dict[str, object]:
+    """The connection mapping for the plugin; a password in the URL is refused."""
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url must be a non-empty string")
+    if url_has_password(url):
+        raise ValueError(_PASSWORD_IN_URL)
+    connection: dict[str, object] = {"url": url.strip()}
+    for key, value in (("password_env", password_env), ("schema", schema)):
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} must be a non-empty string")
+        connection[key] = value.strip()
+    return connection
+
+
+def _described_connection(
+    described: object,
+) -> tuple[dict[str, JsonValue], str, str]:
+    """Check what the plugin returned before anything is stored."""
+    if not isinstance(described, Mapping):
+        raise ConfigurationError(_too_old(DATABASES_PLUGIN_ID))
+    connection = described.get("connection")
+    source_type = described.get("source_type")
+    label = described.get("display_name")
+    if (
+        not isinstance(connection, Mapping)
+        or not isinstance(connection.get("url"), str)
+        or not isinstance(source_type, str)
+        or not source_type.startswith(CONNECTION_SOURCE_TYPE_PREFIX)
+        or not isinstance(label, str)
+        or not label.strip()
+    ):
+        raise ConfigurationError(_too_old(DATABASES_PLUGIN_ID))
+    canonical: dict[str, JsonValue] = {}
+    for key, value in connection.items():
+        if value is None:
+            continue
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ConfigurationError(_too_old(DATABASES_PLUGIN_ID))
+        canonical[key] = value
+    url = canonical["url"]
+    assert isinstance(url, str)
+    if url_has_password(url):
+        raise ConfigurationError(_PASSWORD_IN_URL)
+    return canonical, source_type, label
+
+
+def _connection_view(config: Mapping[str, JsonValue] | None) -> dict[str, JsonValue]:
+    """The stored connection fields for the local user; it never holds a password."""
+    connection = config.get("connection") if isinstance(config, Mapping) else None
+    if not isinstance(connection, Mapping):
+        return {}
+    return {
+        key: connection[key]
+        for key in _CONNECTION_FIELDS
+        if isinstance(connection.get(key), str)
+    }
 
 
 def _document_ids(doc_id: str | Sequence[str]) -> list[str]:

@@ -24,3 +24,12 @@ arbitrary SQL, vector/embedding dependencies, proprietary implementation code,
 credentials, or an implied license grant. The root/core/free-extension license
 decision is still pending; local builds are validation artifacts only and must
 not be redistributed.
+
+## Pull requests
+
+Include source, focused tests, and directly related documentation. Do not
+commit virtual environments, build outputs, caches, keys, or local DataIndex
+workspaces; see `.gitignore`. Keep reproducible fixtures, dependency lockfiles,
+CI configuration, and license/provenance notices in version control. Use
+synthetic data in examples and bug reports. Plugin authors should start with
+`docs/EXTENSION_CONTRACT.md`.

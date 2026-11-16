@@ -1,16 +1,22 @@
-"""Free SQLite extension with schema indexing and bounded approved queries."""
+"""Free database extension: schema indexing and bounded approved queries.
+
+SQLite and DuckDB files are registered by local path. Database servers
+(PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, Snowflake, BigQuery,
+ClickHouse and MongoDB) are registered by a password-free connection whose
+password is read from an environment variable when a connection opens. Every
+engine shares one contract: an explicit table and column allowlist, schema-only
+indexing and execution of host-approved ``QueryDefinition`` templates only.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import sqlite3
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dataindex.models import (
@@ -31,6 +37,21 @@ from dataindex.models import (
     ToolRequest,
 )
 
+from dataindex_ext_databases.backends import (
+    DatabaseBackend,
+    DuckDBFile,
+    ServerDatabase,
+    SQLiteFile,
+    canonical_json,
+    duckdb_file_state_sha256,
+    sqlite_file_state_sha256,
+)
+from dataindex_ext_databases.connections import (
+    ENGINES,
+    parse_connection,
+    supported_engines,
+)
+from dataindex_ext_databases.duckdb_backend import DUCKDB_SOURCE_TYPE, is_duckdb_file
 from dataindex_ext_databases.exceptions import (
     ClosedDatabaseIndexError,
     DatabaseDeadlineExceededError,
@@ -39,7 +60,6 @@ from dataindex_ext_databases.exceptions import (
     DatabaseRegistrationError,
     DatabaseResultTooLargeError,
     DatabaseSourceChangedError,
-    DatabaseSchemaChangedError,
     DatabaseSourceConflictError,
     InvalidDatabaseConfigurationError,
     InvalidDatabaseToolRequestError,
@@ -52,31 +72,30 @@ from dataindex_ext_databases.queries import (
     JoinRule,
     QueryDefinition,
 )
+from dataindex_ext_databases.schema import SchemaInfo
 from dataindex_ext_databases.sqlite import (
     MAX_SCHEMA_COLUMNS,
     MAX_SCHEMA_TABLES,
     MAX_SQLITE_RESULT_ROWS,
     MAX_SQLITE_VALUE_BYTES,
-    SchemaInfo,
-    open_read_only,
-    inspect_schema,
-    query_schema_version,
-    run_bounded_query,
 )
 
 PLUGIN_ID = "databases"
 DISTRIBUTION = "dataindex-ext-databases"
 PLUGIN_VERSION = "0.1.0"
 CORE_API_RANGE = ">=0.1,<0.2"
-SUPPORTED_SOURCE_TYPES = frozenset(
-    {"application/vnd.sqlite3", "application/x-sqlite3"}
-)
+SQLITE_SOURCE_TYPES = frozenset({"application/vnd.sqlite3", "application/x-sqlite3"})
+FILE_SOURCE_TYPES = SQLITE_SOURCE_TYPES | {DUCKDB_SOURCE_TYPE}
+CONNECTION_SOURCE_TYPES = frozenset(spec.source_type for spec in ENGINES.values())
+SUPPORTED_SOURCE_TYPES = FILE_SOURCE_TYPES | CONNECTION_SOURCE_TYPES
 QUERY_TOOL_ID = "databases.query"
 MAX_QUERY_TEXT_BYTES = MAX_SQLITE_VALUE_BYTES
 MAX_QUERY_DEFINITIONS = 128
 MAX_DESCRIPTION_JSON_BYTES = 12 * 1024
 MAX_SOURCE_KEY_LENGTH = 256
 MAX_REGISTERED_SOURCES = 256
+_FILE_CONFIG_KEYS = frozenset({"allowed_columns", "queries"})
+_CONNECTION_CONFIG_KEYS = frozenset({"connection", "allowed_columns", "queries"})
 
 _MANIFEST = ExtensionManifest(
     plugin_id=PLUGIN_ID,
@@ -136,19 +155,20 @@ _QUERY_TOOL = _query_tool()
 @dataclass(frozen=True, slots=True)
 class _RegisteredSource:
     source: SourceRef
-    path: Path
-    file_state_sha256: str
+    backend: DatabaseBackend
     allowed_columns: Mapping[str, frozenset[str]]
     schema: SchemaInfo
     queries: Mapping[str, QueryDefinition]
 
 
-class SQLiteDatabaseExtension(DataIndexExtension):
-    """Index allowed SQLite schema and execute only host-approved query specs.
+class DatabaseExtension(DataIndexExtension):
+    """Index allowlisted database schema and execute only host-approved query specs.
 
-    The host authorizes the source and passes its explicit local path to
-    ``register_database``. Source IDs are never interpreted as paths. Every
-    connection is opened in SQLite read-only mode and every operation is
+    The host authorizes each source and passes either an explicit local file
+    path to ``register_database`` (SQLite, DuckDB) or a password-free
+    connection to ``register_connection`` (database servers). Source IDs are
+    never interpreted as paths or URLs. Files are opened read-only, server
+    sessions are read-only and always rolled back, and every operation is
     restricted to a predeclared ``QueryDefinition``.
     """
 
@@ -175,20 +195,95 @@ class SQLiteDatabaseExtension(DataIndexExtension):
         allowed_columns: Mapping[str, Sequence[str]],
         queries: Sequence[QueryDefinition],
     ) -> None:
-        """Register an authorized file and explicit per-table column allowlist."""
+        """Register an authorized SQLite or DuckDB file and its column allowlist."""
         self._ensure_open()
-        probe = self.probe(source)
-        if not probe.supported:
-            raise UnsupportedDatabaseSourceError(probe.reason or "unsupported source")
-        if (
-            len(source.source_id) > MAX_SOURCE_KEY_LENGTH
-            or len(source.version) > MAX_SOURCE_KEY_LENGTH
-        ):
-            raise InvalidDatabaseConfigurationError(
-                f"source ID and version must be at most {MAX_SOURCE_KEY_LENGTH} "
-                "characters"
+        self._check_source_ref(source)
+        if source.source_type not in FILE_SOURCE_TYPES:
+            raise UnsupportedDatabaseSourceError(
+                f"{source.source_type!r} is a database server source type; "
+                "use register_connection"
             )
-        allowed = _normalize_allowlist(allowed_columns)
+        backend_type: type[SQLiteFile] | type[DuckDBFile] = (
+            DuckDBFile if source.source_type == DUCKDB_SOURCE_TYPE else SQLiteFile
+        )
+
+        def open_backend() -> DatabaseBackend:
+            path = _resolve_database_file(database_path)
+            if backend_type is DuckDBFile and not is_duckdb_file(path):
+                raise DatabaseRegistrationError("database path is not a DuckDB file")
+            return backend_type(path)
+
+        self._register(
+            source,
+            open_backend,
+            backend_type.reserved_prefixes,
+            _label(backend_type.title),
+            allowed_columns,
+            queries,
+        )
+
+    def register_connection(
+        self,
+        source: SourceRef,
+        connection: Mapping[str, object],
+        *,
+        allowed_columns: Mapping[str, Sequence[str]],
+        queries: Sequence[QueryDefinition],
+        expected_state: str | None = None,
+    ) -> str:
+        """Register an authorized database server and its column allowlist.
+
+        ``connection`` holds ``url`` without a password, an optional
+        ``password_env`` naming the ``DATAINDEX_*`` environment variable that
+        holds the password, and an optional ``schema``. The server is contacted
+        to reflect the allowlisted tables. When ``expected_state`` is given,
+        registration fails unless the reflected schema still matches it.
+        Returns the schema state (see ``connection_source_version``).
+        """
+        self._ensure_open()
+        self._check_source_ref(source)
+        settings = parse_connection(connection)
+        if source.source_type != settings.engine.source_type:
+            raise UnsupportedDatabaseSourceError(
+                f"source type {source.source_type!r} does not match the "
+                f"{settings.engine.label} connection; use "
+                f"{settings.engine.source_type!r}"
+            )
+        settings.require_driver()
+        backend = ServerDatabase(settings)
+
+        def check_state(schema: SchemaInfo) -> None:
+            if expected_state is not None and (
+                _server_state(backend, schema) != expected_state
+            ):
+                raise DatabaseSourceChangedError(
+                    f"the {settings.engine.label} schema changed after the source "
+                    "was submitted; submit it again"
+                )
+
+        registered = self._register(
+            source,
+            lambda: backend,
+            backend.reserved_prefixes,
+            settings.engine.label,
+            allowed_columns,
+            queries,
+            check=check_state,
+        )
+        return _server_state(registered.backend, registered.schema)
+
+    def _register(
+        self,
+        source: SourceRef,
+        open_backend: Callable[[], DatabaseBackend],
+        reserved_prefixes: Sequence[str],
+        label: str,
+        allowed_columns: Mapping[str, Sequence[str]],
+        queries: Sequence[QueryDefinition],
+        *,
+        check: Callable[[SchemaInfo], None] | None = None,
+    ) -> _RegisteredSource:
+        allowed = _normalize_allowlist(allowed_columns, reserved_prefixes, label)
         if not isinstance(queries, Sequence) or isinstance(queries, (str, bytes)):
             raise InvalidDatabaseConfigurationError(
                 "queries must be a finite sequence of QueryDefinition values"
@@ -222,37 +317,15 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             raise DatabaseSourceConflictError(
                 "a source type cannot change between registered revisions"
             )
-        path = _resolve_database_file(database_path)
-
-        file_state_before = _database_file_state_sha256(path)
-        connection: sqlite3.Connection | None = None
-        try:
-            connection = open_read_only(path)
-            connection.execute("BEGIN")
-            schema = inspect_schema(connection, allowed)
-            connection.execute("COMMIT")
-        except (OSError, sqlite3.Error, UnauthorizedDatabaseAccessError) as error:
-            raise DatabaseRegistrationError(
-                "could not inspect the allowlisted SQLite schema"
-            ) from error
-        finally:
-            if connection is not None:
-                connection.close()
-
-        file_state_after = _database_file_state_sha256(path)
-        if file_state_before != file_state_after:
-            raise DatabaseSourceChangedError(
-                "SQLite file changed during registration; retry with a new source version"
-            )
+        backend = open_backend()
+        schema = backend.inspect(allowed, None)
+        if check is not None:
+            check(schema)
         for query in query_list:
-            _validate_query_definition(query, allowed, schema)
-        registered = _RegisteredSource(
-            source, path, file_state_after, allowed, schema, query_map
-        )
+            _validate_query_definition(query, allowed, schema, backend)
         if existing is not None:
             if (
-                existing.path != path
-                or existing.file_state_sha256 != file_state_after
+                existing.backend.identity() != backend.identity()
                 or existing.allowed_columns != allowed
                 or existing.schema.version != schema.version
                 or existing.queries != query_map
@@ -262,8 +335,10 @@ class SQLiteDatabaseExtension(DataIndexExtension):
                     "the same source ID/version was registered with different "
                     "database configuration or schema"
                 )
-            return
+            return existing
+        registered = _RegisteredSource(source, backend, allowed, schema, query_map)
         self._sources[key] = registered
+        return registered
 
     def register_database_config(
         self,
@@ -278,33 +353,48 @@ class SQLiteDatabaseExtension(DataIndexExtension):
         form so a source can be registered again after a restart.
         """
         self._ensure_open()
-        if not isinstance(config, Mapping) or set(config) != {
-            "allowed_columns",
-            "queries",
-        }:
-            raise InvalidDatabaseConfigurationError(
-                "database configuration requires exactly allowed_columns and queries"
-            )
-        allowed_columns = config["allowed_columns"]
-        raw_queries = config["queries"]
-        if not isinstance(allowed_columns, Mapping):
-            raise InvalidDatabaseConfigurationError(
-                "allowed_columns must map tables to column names"
-            )
-        if not isinstance(raw_queries, (list, tuple)) or not (
-            1 <= len(raw_queries) <= MAX_QUERY_DEFINITIONS
-        ):
-            raise InvalidDatabaseConfigurationError(
-                f"queries must be a list of 1 to {MAX_QUERY_DEFINITIONS} definitions"
-            )
-        try:
-            queries = tuple(QueryDefinition.from_mapping(item) for item in raw_queries)
-        except (TypeError, ValueError) as error:
-            raise InvalidDatabaseConfigurationError(
-                f"invalid query definition: {error}"
-            ) from error
+        allowed_columns, queries = _split_config(
+            config,
+            _FILE_CONFIG_KEYS,
+            "database configuration requires exactly allowed_columns and queries",
+        )
         self.register_database(
             source, database_path, allowed_columns=allowed_columns, queries=queries
+        )
+
+    def register_connection_config(
+        self,
+        source: SourceRef,
+        config: Mapping[str, object],
+        *,
+        expected_state: str | None = None,
+    ) -> str:
+        """Register a database server from its JSON-compatible configuration.
+
+        ``config`` holds ``connection`` (see ``register_connection``),
+        ``allowed_columns`` and ``queries``. It never contains a password, so
+        hosts can persist it and register the source again after a restart.
+        """
+        self._ensure_open()
+        connection = (
+            config.get("connection") if isinstance(config, Mapping) else None
+        )
+        allowed_columns, queries = _split_config(
+            config,
+            _CONNECTION_CONFIG_KEYS,
+            "connection configuration requires exactly connection, "
+            "allowed_columns and queries",
+        )
+        if not isinstance(connection, Mapping):
+            raise InvalidDatabaseConfigurationError(
+                "connection must be an object with a url"
+            )
+        return self.register_connection(
+            source,
+            connection,
+            allowed_columns=allowed_columns,
+            queries=queries,
+            expected_state=expected_state,
         )
 
     def database_source_version(
@@ -312,13 +402,70 @@ class SQLiteDatabaseExtension(DataIndexExtension):
     ) -> str:
         """Return a source version string for the file's current state.
 
-        The value changes when the SQLite file or its WAL file is replaced,
-        resized or modified, so a changed database always needs a new version.
+        The value changes when the SQLite or DuckDB file or its write-ahead log
+        is replaced, resized or modified, so a changed database always needs a
+        new version.
         """
         self._ensure_open()
-        return "sqlite-state:" + _database_file_state_sha256(
-            _resolve_database_file(database_path)
+        path = _resolve_database_file(database_path)
+        if is_duckdb_file(path):
+            return "duckdb-state:" + duckdb_file_state_sha256(path)
+        return "sqlite-state:" + sqlite_file_state_sha256(path)
+
+    def describe_connection(
+        self, connection: Mapping[str, object]
+    ) -> dict[str, JsonValue]:
+        """Validate a connection without contacting the server.
+
+        Returns the canonical password-free ``connection`` mapping with the
+        engine, its source type, display name, support tier and a stable
+        ``connection_id`` digest of the server, database and schema. Fails with
+        an install hint when the engine's driver is not installed.
+        """
+        self._ensure_open()
+        settings = parse_connection(connection)
+        settings.require_driver()
+        return {
+            "connection": dict(settings.to_mapping()),
+            "engine": settings.engine.name,
+            "label": settings.engine.label,
+            "source_type": settings.engine.source_type,
+            "display_name": settings.display_name,
+            "connection_id": settings.connection_id,
+            "support_tier": settings.engine.tier,
+        }
+
+    def connection_source_version(self, config: Mapping[str, object]) -> str:
+        """Return the current schema state of a connection configuration.
+
+        This contacts the server and reflects the allowlisted tables without
+        registering anything. The value changes whenever their reflected schema
+        changes; row changes do not change it.
+        """
+        self._ensure_open()
+        allowed_columns, _queries = _split_config(
+            config,
+            _CONNECTION_CONFIG_KEYS,
+            "connection configuration requires exactly connection, "
+            "allowed_columns and queries",
         )
+        connection = config["connection"]
+        if not isinstance(connection, Mapping):
+            raise InvalidDatabaseConfigurationError(
+                "connection must be an object with a url"
+            )
+        settings = parse_connection(connection)
+        settings.require_driver()
+        backend = ServerDatabase(settings)
+        allowed = _normalize_allowlist(
+            allowed_columns, backend.reserved_prefixes, settings.engine.label
+        )
+        return _server_state(backend, backend.inspect(allowed, None))
+
+    @staticmethod
+    def supported_engines() -> dict[str, dict[str, object]]:
+        """Server engines with their URL schemes, install extra and support tier."""
+        return supported_engines()
 
     def unregister_database(self, source_id: str) -> int:
         """Drop every registered revision of a source; return how many were dropped."""
@@ -333,11 +480,15 @@ class SQLiteDatabaseExtension(DataIndexExtension):
     ) -> Iterator[Node]:
         self._ensure_open()
         registered = self._get_source(source)
+        backend = registered.backend
+        scheme = backend.schema_scheme
         self._check_deadline(ctx.deadline_monotonic)
-        self._assert_schema_current(registered)
+        backend.assert_current(
+            registered.schema, registered.allowed_columns, ctx.deadline_monotonic
+        )
         self._check_deadline(ctx.deadline_monotonic)
         root_locator = NativeLocator(
-            "sqlite-schema",
+            scheme,
             1,
             {"kind": "database", "schema_version": registered.schema.version},
         )
@@ -347,18 +498,32 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             source_id=source.source_id,
             source_version=source.version,
             kind="database",
-            title="SQLite database",
+            title=backend.title,
             locator=root_locator,
-            attributes={"schema_version": registered.schema.version},
+            attributes=backend.root_attributes(registered.schema),
         )
         table_ids: dict[str, str] = {}
         for table_name in sorted(registered.schema.tables):
             table = registered.schema.tables[table_name]
-            locator = NativeLocator(
-                "sqlite-schema", 1, {"kind": "table", "table": table_name}
-            )
+            locator = NativeLocator(scheme, 1, {"kind": "table", "table": table_name})
             table_id = _node_id(source, locator)
             table_ids[table_name] = table_id
+            attributes: dict[str, JsonValue] = {
+                "primary_key_columns": (
+                    list(table.primary_key_columns)
+                    if set(table.primary_key_columns)
+                    <= registered.allowed_columns[table_name]
+                    else []
+                ),
+                "primary_key_complete": (
+                    set(table.primary_key_columns)
+                    <= registered.allowed_columns[table_name]
+                ),
+                "primary_key_column_count": len(table.primary_key_columns),
+                "foreign_key_count": len(table.foreign_keys),
+                "column_count": len(table.columns),
+                "object_kind": table.object_kind,
+            }
             yield Node(
                 node_id=table_id,
                 source_id=source.source_id,
@@ -367,26 +532,12 @@ class SQLiteDatabaseExtension(DataIndexExtension):
                 title=table_name,
                 locator=locator,
                 parent_id=root_id,
-                attributes={
-                    "primary_key_columns": (
-                        list(table.primary_key_columns)
-                        if set(table.primary_key_columns)
-                        <= registered.allowed_columns[table_name]
-                        else []
-                    ),
-                    "primary_key_complete": (
-                        set(table.primary_key_columns)
-                        <= registered.allowed_columns[table_name]
-                    ),
-                    "primary_key_column_count": len(table.primary_key_columns),
-                    "foreign_key_count": len(table.foreign_keys),
-                    "column_count": len(table.columns),
-                },
+                attributes=attributes,
             )
             for column in table.columns:
                 self._check_deadline(ctx.deadline_monotonic)
                 column_locator = NativeLocator(
-                    "sqlite-schema",
+                    scheme,
                     1,
                     {
                         "kind": "column",
@@ -414,7 +565,7 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             for foreign_key in table.foreign_keys:
                 self._check_deadline(ctx.deadline_monotonic)
                 locator = NativeLocator(
-                    "sqlite-schema",
+                    scheme,
                     1,
                     {
                         "kind": "foreign_key",
@@ -522,45 +673,32 @@ class SQLiteDatabaseExtension(DataIndexExtension):
                 f"limit must be between 1 and {maximum}"
             )
 
-        connection: sqlite3.Connection | None = None
-        try:
-            connection = open_read_only(registered.path)
-            connection.execute("BEGIN")
-            _check_schema_version(connection, registered)
-            _assert_file_state(registered)
-            read_timestamp = _utc_timestamp()
-            rows, truncated = run_bounded_query(
-                connection,
-                query,
-                filters,
-                requested_limit,
-                registered.allowed_columns,
-                ctx.deadline_monotonic,
-            )
-            _check_schema_version(connection, registered)
-            self._check_deadline(ctx.deadline_monotonic)
-            connection.execute("COMMIT")
-        except (sqlite3.Error, OSError) as error:
-            raise DatabaseQueryError("could not open or query the SQLite source") from error
-        finally:
-            if connection is not None:
-                connection.close()
-        _assert_file_state(registered)
+        backend = registered.backend
+        outcome = backend.run(
+            query,
+            filters,
+            requested_limit,
+            registered.allowed_columns,
+            registered.schema,
+            ctx.deadline_monotonic,
+        )
+        rows = outcome.rows
+        source_state = backend.evidence_fields()
 
-        canonical_filters = json.loads(_canonical_json(dict(filters)))
+        canonical_filters = json.loads(canonical_json(dict(filters)))
         query_definition_sha256 = hashlib.sha256(
-            _canonical_json(asdict(query)).encode("utf-8")
+            canonical_json(asdict(query)).encode("utf-8")
         ).hexdigest()
         result = {
             "query_id": query.query_id,
             "filters": canonical_filters,
             "effective_limit": requested_limit,
             "query_definition_sha256": query_definition_sha256,
-            "database_file_state_sha256": registered.file_state_sha256,
-            "read_timestamp_utc": read_timestamp,
+            **source_state,
+            "read_timestamp_utc": outcome.read_timestamp_utc,
             "schema_version": registered.schema.version,
             "row_count": len(rows),
-            "truncated": truncated,
+            "truncated": outcome.truncated,
             "rows": rows,
         }
         try:
@@ -574,7 +712,8 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             )
         except (TypeError, ValueError) as error:
             raise DatabaseQueryError(
-                "SQLite result could not be represented as JSON evidence"
+                f"{_label(backend.title)} result could not be represented as JSON "
+                "evidence"
             ) from error
         if result_size > MAX_QUERY_TEXT_BYTES:
             raise DatabaseResultTooLargeError(
@@ -584,13 +723,13 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             source_id=source.source_id,
             source_version=source.version,
             locator=NativeLocator(
-                "sqlite-query",
+                backend.query_scheme,
                 1,
                 {
                     "query_id": query.query_id,
                     "query_definition_sha256": query_definition_sha256,
-                    "database_file_state_sha256": registered.file_state_sha256,
-                    "read_timestamp_utc": read_timestamp,
+                    **source_state,
+                    "read_timestamp_utc": outcome.read_timestamp_utc,
                     "schema_version": registered.schema.version,
                 },
             ),
@@ -639,22 +778,18 @@ class SQLiteDatabaseExtension(DataIndexExtension):
             )
         return registered.source
 
-    @staticmethod
-    def _assert_schema_current(registered: _RegisteredSource) -> None:
-        connection: sqlite3.Connection | None = None
-        try:
-            connection = open_read_only(registered.path)
-            connection.execute("BEGIN")
-            _check_schema_version(connection, registered)
-            connection.execute("COMMIT")
-        except (sqlite3.Error, OSError) as error:
-            raise DatabaseQueryError(
-                "could not verify the registered SQLite schema"
-            ) from error
-        finally:
-            if connection is not None:
-                connection.close()
-        _assert_file_state(registered)
+    def _check_source_ref(self, source: SourceRef) -> None:
+        probe = self.probe(source)
+        if not probe.supported:
+            raise UnsupportedDatabaseSourceError(probe.reason or "unsupported source")
+        if (
+            len(source.source_id) > MAX_SOURCE_KEY_LENGTH
+            or len(source.version) > MAX_SOURCE_KEY_LENGTH
+        ):
+            raise InvalidDatabaseConfigurationError(
+                f"source ID and version must be at most {MAX_SOURCE_KEY_LENGTH} "
+                "characters"
+            )
 
     @staticmethod
     def _check_deadline(deadline: float | None) -> None:
@@ -674,6 +809,40 @@ def _resolve_database_file(database_path: str | os.PathLike[str]) -> Path:
     if not path.is_file():
         raise DatabaseRegistrationError("database path must identify a file")
     return path
+
+
+def _label(title: str) -> str:
+    return title.removesuffix(" database")
+
+
+def _server_state(backend: DatabaseBackend, schema: SchemaInfo) -> str:
+    return f"{backend.engine}-schema:{schema.version}"
+
+
+def _split_config(
+    config: Mapping[str, object], keys: frozenset[str], message: str
+) -> tuple[Mapping[str, Sequence[str]], tuple[QueryDefinition, ...]]:
+    if not isinstance(config, Mapping) or set(config) != keys:
+        raise InvalidDatabaseConfigurationError(message)
+    allowed_columns = config["allowed_columns"]
+    raw_queries = config["queries"]
+    if not isinstance(allowed_columns, Mapping):
+        raise InvalidDatabaseConfigurationError(
+            "allowed_columns must map tables to column names"
+        )
+    if not isinstance(raw_queries, (list, tuple)) or not (
+        1 <= len(raw_queries) <= MAX_QUERY_DEFINITIONS
+    ):
+        raise InvalidDatabaseConfigurationError(
+            f"queries must be a list of 1 to {MAX_QUERY_DEFINITIONS} definitions"
+        )
+    try:
+        queries = tuple(QueryDefinition.from_mapping(item) for item in raw_queries)
+    except (TypeError, ValueError) as error:
+        raise InvalidDatabaseConfigurationError(
+            f"invalid query definition: {error}"
+        ) from error
+    return allowed_columns, queries
 
 
 def _describe_queries(queries: Mapping[str, QueryDefinition]) -> str:
@@ -730,6 +899,8 @@ def _describe_query(query: QueryDefinition) -> str:
 
 def _normalize_allowlist(
     allowed_columns: Mapping[str, Sequence[str]],
+    reserved_prefixes: Sequence[str] = ("sqlite_",),
+    label: str = "SQLite",
 ) -> dict[str, frozenset[str]]:
     if not isinstance(allowed_columns, Mapping) or not allowed_columns:
         raise InvalidDatabaseConfigurationError(
@@ -750,9 +921,9 @@ def _normalize_allowlist(
             raise InvalidDatabaseConfigurationError(
                 "allowlisted table names must be at most 128 characters"
             )
-        if table.casefold().startswith("sqlite_"):
+        if any(table.casefold().startswith(prefix) for prefix in reserved_prefixes):
             raise InvalidDatabaseConfigurationError(
-                "SQLite internal tables cannot be allowlisted"
+                f"{label} internal tables cannot be allowlisted"
             )
         if not isinstance(columns, Sequence) or isinstance(columns, (str, bytes)):
             raise InvalidDatabaseConfigurationError(
@@ -784,11 +955,17 @@ def _validate_query_definition(
     query: QueryDefinition,
     allowed_columns: Mapping[str, frozenset[str]],
     schema: SchemaInfo,
+    backend: DatabaseBackend,
 ) -> None:
     visited_tables = {query.table}
     if query.table not in allowed_columns:
         raise UnauthorizedDatabaseAccessError(
             f"query template {query.query_id!r} uses a non-allowlisted table"
+        )
+    if query.joins and not backend.supports_joins:
+        raise InvalidDatabaseConfigurationError(
+            f"query template {query.query_id!r} uses joins, which "
+            f"{_label(backend.title)} sources do not support"
         )
     for join in query.joins:
         if join.left.table not in visited_tables or join.right.table in visited_tables:
@@ -825,7 +1002,9 @@ def _validate_query_definition(
                 f"query template {query.query_id!r} references a non-allowlisted "
                 f"column in {reference.table!r}"
             )
-    if query.aggregate is None:
+    if query.aggregate is None and not set(query.columns) <= set(query.order_by):
+        # Ordering by every selected column is deterministic even without a key
+        # (views have none): rows that tie are identical in the result.
         for table_name in visited_tables:
             primary_key = schema.tables[table_name].primary_key_columns
             if not primary_key or any(
@@ -834,7 +1013,7 @@ def _validate_query_definition(
             ):
                 raise InvalidDatabaseConfigurationError(
                     f"query template {query.query_id!r} must order by every joined "
-                    "table primary key"
+                    "table primary key or by every selected column"
                 )
 
 
@@ -866,61 +1045,6 @@ def _is_declared_foreign_key(join: JoinRule, schema: SchemaInfo) -> bool:
     return False
 
 
-def _check_schema_version(
-    connection: sqlite3.Connection, registered: _RegisteredSource
-) -> None:
-    if query_schema_version(connection) != registered.schema.version:
-        raise DatabaseSchemaChangedError(
-            "SQLite schema changed; re-register with a new source version"
-        )
-
-
-def _assert_file_state(registered: _RegisteredSource) -> None:
-    if _database_file_state_sha256(registered.path) != registered.file_state_sha256:
-        raise DatabaseSourceChangedError(
-            "SQLite file identity changed; register the changed data with a new "
-            "source version"
-        )
-
-
-def _database_file_state_sha256(path: Path) -> str:
-    def stat_fields(candidate: Path) -> tuple[int, int, int, int] | None:
-        try:
-            file_stat = candidate.stat()
-        except FileNotFoundError:
-            return None
-        except OSError as error:
-            raise DatabaseSourceChangedError(
-                "could not verify the registered SQLite file identity"
-            ) from error
-        return (
-            file_stat.st_dev,
-            file_stat.st_ino,
-            file_stat.st_size,
-            file_stat.st_mtime_ns,
-        )
-
-    state = {
-        "database": stat_fields(path),
-        "wal": stat_fields(Path(f"{path}-wal")),
-    }
-    if state["database"] is None:
-        raise DatabaseSourceChangedError(
-            "registered SQLite database file is no longer available"
-        )
-    return hashlib.sha256(_canonical_json(state).encode("utf-8")).hexdigest()
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
 def _node_id(source: SourceRef, locator: NativeLocator) -> str:
     identity = json.dumps(
         {
@@ -936,13 +1060,9 @@ def _node_id(source: SourceRef, locator: NativeLocator) -> str:
     return "db-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
 
 
-def _utc_timestamp() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
-    )
+SQLiteDatabaseExtension = DatabaseExtension
+"""The original name, kept for code written before other engines were added."""
 
 
-def load_plugin() -> SQLiteDatabaseExtension:
-    return SQLiteDatabaseExtension()
+def load_plugin() -> DatabaseExtension:
+    return DatabaseExtension()

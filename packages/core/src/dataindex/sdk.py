@@ -407,8 +407,11 @@ class DataIndexClient:
         name: str | None = None,
         wait: bool = True,
     ) -> dict[str, JsonValue]:
-        """Index a Markdown, text or HTML file; return its ``doc_id`` and status.
+        """Index a document file; return its ``doc_id`` and status.
 
+        PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, e-mail, CSV,
+        JSON, XML, Markdown, HTML and plain-text files are supported; PDF and
+        the 97-2003 Office formats need extras of ``dataindex-ext-documents``.
         Submitting the same path again is idempotent: ``change`` reports
         ``"new"``, ``"updated"`` or ``"unchanged"``. Indexing is synchronous, so
         ``wait`` only exists for PageIndex compatibility and has no effect.
@@ -417,15 +420,32 @@ class DataIndexClient:
 
     def submit_database(
         self,
-        path: str | os.PathLike[str],
+        path: str | os.PathLike[str] | None = None,
         *,
         allowed_columns: Mapping[str, Sequence[str]],
         queries: Sequence[object],
         name: str | None = None,
+        url: str | None = None,
+        password_env: str | None = None,
+        schema: str | None = None,
     ) -> dict[str, JsonValue]:
-        """Register a SQLite file with the typed, read-only queries you allow."""
+        """Register a database with the typed, read-only queries you allow.
+
+        Pass ``path`` for a SQLite or DuckDB file, or ``url`` for a database
+        server such as ``postgresql://reader@db.example.com/sales``. A URL never
+        holds the password: put it in an environment variable whose name starts
+        with ``DATAINDEX_`` and pass that name as ``password_env``. ``schema``
+        selects a schema on servers that have them. The server's driver comes
+        from an extra of ``dataindex-ext-databases``.
+        """
         return self._local().submit_database(
-            path, allowed_columns=allowed_columns, queries=queries, name=name
+            path,
+            allowed_columns=allowed_columns,
+            queries=queries,
+            name=name,
+            url=url,
+            password_env=password_env,
+            schema=schema,
         )
 
     def get_document(self, doc_id: str) -> dict[str, JsonValue]:

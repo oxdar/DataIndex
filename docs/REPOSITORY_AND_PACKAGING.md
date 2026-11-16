@@ -4,7 +4,8 @@
 environments, including a synthetic premium fixture. Phases 03–06 review gates
 remain open, and the unresolved core/free-package license blocks redistribution.
 A user-requested PageIndex-style local mode and the optional `dataindex-llm`
-adapter are built on top (see [ADR-007](./adr/ADR-007-local-pageindex-style-mode.md)).
+adapter are built on top (see [ADR-007](./adr/ADR-007-local-pageindex-style-mode.md)),
+and so is the optional local browser chat `dataindex-ui`.
 See [ADR-001](./adr/ADR-001-open-core-plugins.md) and
 [ADR-006](./adr/ADR-006-repository-and-release-versioning.md).
 
@@ -20,6 +21,7 @@ packages/
     documents/                  # dataindex-ext-documents
     databases/                  # dataindex-ext-databases
   llm/                          # dataindex-llm; imports as dataindex_llm
+  ui/                           # dataindex-ui; imports as dataindex_ui
 examples/
 tests/
   contracts/
@@ -31,7 +33,9 @@ changelog, license/notice and independent release version. No megawheel and no
 unconditional optional-extension imports in core. `dataindex-llm` is not a
 plugin: it is a separate adapter that supplies chat models by name, core imports
 it lazily only when a model name is given, and core needs no provider SDK or
-credential without it.
+credential without it. `dataindex-ui` is not a plugin either: it is a local
+FastAPI/Uvicorn chat page over `DataIndexClient`. Core never imports it, and it
+is the only package that depends on FastAPI or Uvicorn.
 
 Production commercial implementations stay in private repositories, outside the
 public repository. The public repository includes only the synthetic
@@ -49,6 +53,7 @@ python -m pip install dataindex-core
 python -m pip install dataindex-ext-documents
 python -m pip install dataindex-ext-databases
 python -m pip install dataindex-llm
+python -m pip install dataindex-ui        # optional browser chat; needs core and dataindex-llm
 ```
 
 The documented one-line setup for the PageIndex-style local mode is:
@@ -81,7 +86,8 @@ protocol by its own tests.
 
 Distribution names remain proposed. A PyPI project JSON lookup returned HTTP 404
 for `dataindex-core`, `dataindex-ext-documents` and `dataindex-ext-databases` on
-2026-11-13, and for `dataindex-llm` on 2026-11-14. This means no project
+2026-11-13, for `dataindex-llm` on 2026-11-14 and for `dataindex-ui` on
+2026-11-15. This means no project
 metadata was found at those endpoints then; it does **not** reserve the names or
 prove they remain publishable. The bare name `dataindex` already exists on PyPI
 as a yanked `0.0.0` placeholder whose owner is not identified, which is another
@@ -99,10 +105,14 @@ has not yet run on GitHub.
 | Install environment | Required checks |
 |---|---|
 | Clean venv + core wheel | Install, `pip check`, `import dataindex`, CLI/empty registry |
-| Core + documents wheels | Install, `pip check`, Markdown/TXT/HTML fixture citations |
-| Core + databases wheels | Install, `pip check`, bounded SQLite fixture operations |
+| Core + documents wheels without parser extras | Install, `pip check`, standard-library formats, graceful missing-parser hints |
+| Core + documents wheel with `[all]` | Install, `pip check`, all format fixtures, optional-parser tests and local-client citations |
+| Core + databases wheels | Install, `pip check`, bounded SQLite fixture operations with no driver extras |
+| Core + databases wheel with `[duckdb,postgresql,mongodb]` and `mongomock` | Install, `pip check`, DuckDB file tests, the SQLAlchemy server path against a SQLite stand-in, MongoDB against mongomock; then remove the drivers and recheck SQLite |
+| Core + databases wheel with server extras and live servers | PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB live contract tests; runs only in the `database-servers` job of `.github/workflows/databases.yml`, which fails if any live test is skipped |
 | Core + both free wheels | Install, `pip check`, both extension suites/examples; remove databases and recheck documents/core |
 | Core + both free wheels + `dataindex-llm` | Install, `pip check`, local-mode submit/chat against a loopback fake model; remove `dataindex-llm` and recheck that core-only tests and named-model errors still behave |
+| Core + documents + `dataindex-llm` + `dataindex-ui` | Install, `pip check`, UI suite (sign-in, Host/Origin checks, saved history, SSE chat, uploads); runs in `.github/workflows/ui.yml`, not in `release.yml` |
 | Core + synthetic premium wheel | Missing/grant/expiry/revoke/cross-tenant decisions, with free tools unaffected |
 | Remove one extension | Core and every remaining plugin still function |
 
@@ -121,7 +131,10 @@ provenance. No licensing network or LLM credential is needed for core-only use.
 - The DataBaseIndex wheel also carries a pending-license notice. SQLite source
   versions are host-supplied immutable snapshot identifiers; the extension
   detects ordinary main-database/WAL file-state changes but does not hash all
-  database contents.
+  database contents. Database server versions cover the reflected schema and
+  approved queries, not row contents. Optional driver extras carry their own
+  licenses (for example, psycopg is LGPL-3.0-only); see
+  `THIRD_PARTY_NOTICES.md`.
 - Any adapted PageIndex source must preserve Vectify AI's copyright and full MIT
   license notice, with exact upstream commit, source paths and transformations in
   `THIRD_PARTY_NOTICES.md`.

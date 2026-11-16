@@ -12,7 +12,25 @@
   "source_types": [
     "text/markdown",
     "text/plain",
-    "text/html"
+    "text/html",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/vnd.oasis.opendocument.presentation",
+    "application/rtf",
+    "application/epub+zip",
+    "message/rfc822",
+    "text/csv",
+    "text/tab-separated-values",
+    "application/json",
+    "application/x-ndjson",
+    "application/xml"
   ],
   "publisher": "DataIndex project"
 }

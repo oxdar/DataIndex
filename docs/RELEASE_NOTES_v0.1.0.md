@@ -3,9 +3,12 @@
 **Status: unreleased candidate; not approved for publication.**
 
 This is the first greenfield DataIndex implementation. Candidate packages are
-the independent core, free document and free SQLite extensions, plus a
+the independent core, free document and free database extensions, plus a
 synthetic premium contract-test wheel. The premium fixture is not a commercial
-product.
+product. The database extension reads SQLite files with the standard library,
+and DuckDB files and PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB
+servers through optional driver extras; Snowflake, BigQuery and ClickHouse are
+experimental. Server engines are live-tested only in CI.
 
 The candidate includes typed hierarchical metadata and evidence, bounded
 source-grounded retrieval, an explicit plugin trust registry, host-supplied
@@ -14,7 +17,9 @@ Core has no embedding or vector-database dependency and does not import
 extensions unless an operator explicitly trusts and enables one.
 
 Not included: hosted authentication, plugin sandboxing, a production license
-service, arbitrary SQL, PDF/OCR, or production BIM/CAD/Subsurface integrations.
+service, arbitrary SQL, OCR, or production BIM/CAD/Subsurface integrations.
+The documents extension supports PDF only when its optional `pdf` extra is
+installed; scanned pages are not OCRed.
 The local CLI tenant label is not an authentication boundary.
 
 **Release blockers:** earlier Phase 03–06 human review gates remain open; the

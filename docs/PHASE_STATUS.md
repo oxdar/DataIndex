@@ -1,6 +1,6 @@
 # DataIndex v0.1.0 phase status
 
-**Updated:** 2026-11-14  
+**Updated:** 2026-11-16  
 **Repository state:** Phases 03–06 are implemented and locally validated.
 Phase 07 SDK/CLI and release-readiness work is in progress, and a user-requested
 PageIndex-style local mode (client, CLI, `dataindex-llm` adapter) was added on
@@ -15,7 +15,7 @@ inspected workspace, so no commit is recorded.
 | 01 Core plugin packaging | READY FOR REVIEW | 16 tests pass on Python 3.11.6, 3.12.13 and 3.13.12; built wheel installs cleanly and `pip check` passes | Pending human review |
 | 02 Typed indexes | READY FOR REVIEW | 27 core tests pass on Python 3.11.6; clean wheel install, catalog smoke test and `pip check` pass | Pending human review |
 | 03 Free documents | IMPLEMENTED — VALIDATED; REVIEW/LICENSING GATE OPEN | Core and documents wheels build/install; 29 core tests and 9 document tests pass; uninstall isolation verified | Pending |
-| 04 Free SQL | IMPLEMENTED — VALIDATED; REVIEW/LICENSING GATE OPEN | SQLite wheel, 15 tests, example, dependency and uninstall checks pass on Python 3.11.6 | Pending human review |
+| 04 Free SQL | IMPLEMENTED — VALIDATED; REVIEW/LICENSING GATE OPEN | SQLite wheel, 15 tests, example, dependency and uninstall checks pass on Python 3.11.6; DuckDB and database-server expansion and view support in the 2026-11-16 addenda (server live tests not yet run) | Pending human review |
 | 05 Reasoning | IMPLEMENTED — VALIDATED; REVIEW GATE OPEN | Core and extension wheels build/install; 74 mixed-install tests pass, 46 core-only tests pass; mixed-source demo and removal checks pass | Pending human review |
 | 06 Premium contract test | IMPLEMENTED — VALIDATED; REVIEW GATE OPEN | Core, documents, databases and synthetic premium wheels pass isolated mixed install, entitlement denial/grant/expiry/revoke/cross-tenant and core-removal checks | Pending human review |
 | 07 v0.1 release gate | IN PROGRESS — CANDIDATE NOT RELEASED | See the Phase 07 progress record and the local-mode addendum below; five wheels, mixed suite 2675 passed on Python 3.11.15, 3.12.13 and 3.13.12 | Pending |
@@ -751,3 +751,327 @@ package-name decisions above.
 
 Local mode is complete for review and is not approved. Stop here for human
 review; do not publish or tag `v0.1.0`.
+
+## Local browser chat (`dataindex-ui`) addendum
+
+After the local-mode addendum, the user asked for "a ready to use chat interface"
+for people who run DataIndex locally, built as "a small FastAPI + uvicorn app with
+one static HTML/JS page and SSE streaming" in a separate optional package, and
+asked that it "save the chat history on the sidebar. Including saving the chat
+history content." This is a scope addition recorded in
+[VERSION_0_1_SCOPE.md](./VERSION_0_1_SCOPE.md). It is not part of the phase plan
+and needs maintainer review. No package was published, nothing was committed and
+no tag was created.
+
+**Built** (`packages/ui/`, distribution `dataindex-ui` 0.1.0, import `dataindex_ui`)
+
+- `history.py`: `ChatHistory`, a SQLite store at `<workspace>/ui_history.sqlite3`
+  (`conversations` and `messages`, cascade delete, `PRAGMA user_version = 1`, newer
+  schemas refused, mode `600` on POSIX). It saves questions, answers as
+  `ChatAnswer.to_dict()` JSON with citations, document scope and errors, with
+  bounded titles, message sizes and counts.
+- `worker.py`: `ClientWorker` runs one `DataIndexClient` on a single thread,
+  because the client and its SQLite connections are not thread-safe.
+- `app.py`: the FastAPI app. Loopback `Host` check, per-run token exchanged for an
+  `HttpOnly`/`SameSite=Strict` cookie, `Origin` check on state-changing
+  requests, strict CSP and security headers, and docs/OpenAPI disabled. Routes
+  cover conversations (list/create/get/rename/delete), an SSE message stream
+  (`message`, `status` heartbeats, `done`/`error`), and documents
+  (list/upload/remove). The answer is saved on the worker thread, so it is kept
+  if the browser disconnects. Uploads are bounded to 5 MiB, use safe base names
+  and only the documents extension's suffixes, are written atomically into
+  `ui_uploads/`, and go through `submit_document`.
+- `cli.py`: the `dataindex-ui` command. It accepts only `127.0.0.1`/`::1`,
+  pre-binds the port (exclusive on Windows), prints the sign-in link and opens
+  the browser.
+- `static/`: `index.html`, `app.js`, `app.css`. No framework, no inline script or
+  style, and all dynamic text inserted with `textContent`. Sidebar of saved
+  chats with inline rename and delete (native `prompt()`/`confirm()` are not used
+  because embedded browsers may not support them), document list with upload,
+  remove and per-question scope, citation cards, and light/dark themes.
+- Docs and CI: `packages/ui/README.md`, root `README.md`, `CHANGELOG.md`,
+  `docs/REPOSITORY_AND_PACKAGING.md`, `docs/RELEASE_CHECKLIST.md`,
+  `docs/VERSION_0_1_SCOPE.md`, and a new `.github/workflows/ui.yml`
+  (Ubuntu/Windows, Python 3.11-3.13, installed wheels). Core was not changed.
+
+**Acceptance criteria.** These come from the user's request and the repository
+rules; they are not rows of `docs/ACCEPTANCE_CRITERIA.md`. Each is reported on
+its own.
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Separate optional package; core unaffected | MET for local wheels only | Wheel and sdist build. After `pip uninstall dataindex-ui`, `pip check` is clean and `import dataindex` works. Core has no new dependency and never imports `dataindex_ui`. A PyPI JSON lookup for `dataindex-ui` returned 404 on 2026-11-15, which does not reserve the name. |
+| 2 | FastAPI + Uvicorn, one static HTML/JS page, SSE | MET | `test_chat_flow.py` parses the SSE stream (user message, `status` heartbeats, assistant message, `done`). Manual run under real Uvicorn via `dataindex-ui`. |
+| 3 | Sidebar lists saved chats; full content is saved and restored | MET | `test_history.py` and `test_cited_answer_streams_and_is_saved_across_restarts`; manually, chats, citations and document scope reloaded after a page reload and after a server restart. |
+| 4 | Rename and delete chats | MET | API tests; manual inline rename (HTML in the title shown as text) and delete with confirmation. |
+| 5 | Answer saved if the page goes away mid-answer | MET | `test_an_answer_is_saved_even_if_the_page_goes_away`; manually, a reload during a request still showed the saved answer. |
+| 6 | Citations show source ID, version, native locator and operation | MET | Citation cards rendered `documents.search`, the `sha256:` version and the `markdown-heading` locator with line range against a loopback fake model. |
+| 7 | Local-only access | MET in tests | `test_app_security.py`: wrong `Host` gives 400, missing or wrong cookie 401, missing or foreign `Origin` 403, wrong token 401, CSP and headers present, no docs routes. `--host 0.0.0.0` is rejected. Manually, a cookie from an earlier run got 401 and a request without `Origin` got 403. |
+| 8 | No HTML injection from documents, model output or history | MET in manual check | A document named `Supply <b>terms</b>` containing `<script>` and `<img onerror>` text rendered as literal text in the list, the citation excerpt and the titles; the CSP forbids inline script. No automated browser test exists. |
+| 9 | Uploads are bounded and confined | MET | `test_uploads_are_validated` (unsupported suffix 415, hidden or empty name 400, empty body 400, over 5 MiB 413, nothing left behind) and `test_a_failed_upload_leaves_no_file`; removing an uploaded document deletes only its copy in `ui_uploads/`. |
+| 10 | Works without a model | MET | `test_the_server_starts_and_signs_in_with_the_printed_link` (subprocess, `chat_enabled` false); sending returns 409 and saves nothing. |
+| 11 | Python 3.11+ and declared dependency floors | MET on two configurations | 21 passed on Python 3.13.12 with FastAPI 0.163.1, Starlette 1.10.0, Uvicorn 0.54.0, all from installed wheels with `pip check` clean. 21 passed on Python 3.11.15 with the floors FastAPI 0.115.0, Starlette 0.38.6, Uvicorn 0.30.0 and httpx 0.27.0. Python 3.12 and Linux were not run locally. |
+
+**Static checks.** Ruff (installed only in a scratch venv; the repository
+configures no linter) with `E,F,W,B,UP,S` reports one finding: `S104` on the
+test that asserts `0.0.0.0` is refused. `node --check` passes for `app.js`.
+
+**Known limitations (accepted, not fixed)**
+
+- Answers arrive whole; SSE carries progress, not model tokens.
+- Each question is answered on its own; earlier messages are not sent to the
+  model, as with `dataindex chat`.
+- One worker thread, so a long answer delays document actions (history stays
+  available).
+- The sign-in link is printed to the terminal, and anyone who can read it, or
+  read the workspace files, can see the chats. Browsers do not isolate cookies
+  by port; the cookie name includes the port.
+- The sdist does not include the test helpers (`conftest.py`, `ui_helpers.py`),
+  matching the other packages, which have no `MANIFEST.in`.
+- An editable install of `dataindex-ext-documents` cannot find its manifest, so
+  the UI tests need the extension installed from a wheel.
+- The browser behaviour was checked by hand in one Chromium-based browser; there
+  are no automated browser tests.
+
+**Release blockers added:** maintainer review of this scope addition, the
+`dataindex-ui` license decision (its `LICENSE` is the pending placeholder), and
+running `.github/workflows/ui.yml`, which has never run because the workspace
+has no Git remote.
+
+Stop here for human review; do not publish or tag `v0.1.0`.
+
+## Phase 03 — Expanded document formats (2026-11-16)
+
+**Commit:** none; changes remain uncommitted. The user-requested format
+expansion is implemented in the free documents extension. Its explicit tested
+formats and optional parser extras are documented in
+[`packages/extensions/documents/README.md`](../packages/extensions/documents/README.md).
+
+| Phase 03 acceptance criterion | Result | Evidence |
+|---|---|---|
+| Core wheel remains usable without the documents extension or parser extras | MET | In a clean Python 3.12.13 venv, uninstalled `dataindex-ext-documents`; `import dataindex` reported `0.1.0`, `dataindex extensions list` reported `No extensions discovered.`, and `uv pip check` was clean. |
+| The separate documents wheel indexes natural sections and native locators | MET | Format fixture tests plus local-client submissions of DOCX, XLSX, PPTX, PDF and CSV; each returned the requested section with source version, retrieval operation and native locator. |
+| Missing parser extras do not block other document formats | MET | Clean installed-wheel run without extras: 138 passed, 10 optional-parser cases skipped; missing-parser probe and install-hint tests passed. |
+| The documented full format set works with optional extras | MET | Clean installed-wheel run with `[all]`: 148 passed, including PDF/legacy Office fixtures and local-client citation integration. |
+| Uninstalling the documents wheel leaves core usable | MET | Verified after uninstall in the no-extras environment as above. |
+
+**Validation commands and results** (Python 3.12.13, Windows):
+
+- Built independent wheels with `python -m build --wheel --outdir ... packages/core`
+  and `python -m build --wheel --outdir ... packages/extensions/documents`.
+- Installed those wheels into clean venvs with and without
+  `dataindex-ext-documents[all]`; `uv pip check` passed in both.
+- `python -m pytest packages/extensions/documents/tests tests/integration/test_document_formats_integration.py -q --tb=short`:
+  148 passed in the full-extras environment; 138 passed and 10 skipped without
+  optional parser packages.
+- `python -m pytest packages/core/tests/test_local.py packages/core/tests/test_cli_local.py -q --tb=short`:
+  314 passed.
+- `uvx ruff check --select F ...` passed for the documents source, tests and new
+  integration test. `uvx ruff format --check` passed for the new builders and
+  tests.
+
+**Limitations and review items:** this is a finite supported-format list, not
+universal document support. PDF and legacy Office need their optional extras;
+scanned PDF OCR is not provided. PDF extraction applies deterministic page,
+outline, decoded-stream and work budgets, and can reject complex legitimate
+files. The PDF decode guard is a process-wide hook that is active only during
+DataIndex PDF parsing; plugin code remains in-process and is not sandboxed.
+Third-party parser licenses are recorded in `THIRD_PARTY_NOTICES.md`. CI has
+not been run from GitHub in this workspace.
+
+Stop here for human review; do not advance to another phase, publish or tag
+`v0.1.0`.
+
+## Phase 04 — Database engines beyond SQLite (2026-11-16)
+
+**Commit:** none; changes remain uncommitted. The user asked for database
+support "in addition to SQLite" for "all known databases", and chose the
+engines, SQLAlchemy Core as the SQL driver layer, passwords through environment
+variables only, and a UI connect form. "All known databases" is **not** claimed:
+the supported list is explicit, other URL schemes are refused, and each engine
+carries an honest tier in
+[`packages/extensions/databases/README.md`](../packages/extensions/databases/README.md#supported-engines).
+
+| Engine | Tier | What actually ran here |
+|---|---|---|
+| SQLite file | tested | Standard library; full suite with and without every driver |
+| DuckDB file | tested | In-process `duckdb` 2.0.0 tests: schema, approved queries, file-state version, and sessions that cannot read other files, change settings or write (the deadline interrupt has no dedicated test) |
+| PostgreSQL, MySQL, MariaDB, SQL Server, Oracle Database | integration | Shared SQLAlchemy path exercised end to end against a SQLite stand-in; per-dialect compile tests with bound values; per-engine read-only and timeout guard statements checked against fake sessions. Live tests are written and wired into the `database-servers` CI job but have **not run** (no servers here; GitHub CI not run) |
+| MongoDB | integration | `mongomock` end to end (find and fixed aggregate pipelines); live test written for CI, **not run** |
+| Snowflake, BigQuery, ClickHouse | experimental | Connection parsing and dialect compile tests only; no live tests anywhere |
+
+| Acceptance criterion | Result | Evidence |
+|---|---|---|
+| Correct schema/PK/FK discovery | MET for SQLite, DuckDB, the SQLAlchemy reflection path (stand-in) and mongomock; NOT YET VERIFIED on real servers | Databases suite 388 passed with `[all]`; live tests pending the CI job |
+| Live query returns current row values and deterministic SUM/COUNT | MET on the same engines; real servers pending CI | Extension, integration and example runs below (150000 / 90000 USD cents) |
+| No `UPDATE`/`DROP` or model-authored SQL reaches the database | MET by construction and tests | Only approved `QueryDefinition`s compile, with bound values, for all seven SQL dialects; MongoDB runs only `find` and fixed pipelines; per-engine read-only guards. On SQL Server, Snowflake, BigQuery and ClickHouse the login is the only write barrier (documented) |
+| Database plugin install/uninstall independent of DocumentIndex | MET | Uninstall chain in profile A; UI suite passes without the databases wheel (profile D) |
+| Core stays free of drivers; drivers are per-engine extras | MET | Profile C: core installs only `dataindex-core` and `packaging`; the base databases wheel adds nothing; `[duckdb]` adds only duckdb; `[mongodb]` only pymongo and dnspython |
+| Missing driver fails gracefully with an install hint | MET | `submit-db --url postgresql://...` without drivers exits 2 with `the database connection was rejected: PostgreSQL support needs sqlalchemy, psycopg; run: pip install "dataindex-ext-databases[postgresql]"` |
+| Passwords never stored or echoed | MET | Integration tests scan workspace bytes for the secret; URLs with a password, or a secret in an unknown query parameter, are rejected without echoing it; the UI form refuses a `password` field and never echoes secrets |
+| UI connect form | MET | 24 UI tests; verified in a browser in an earlier step |
+
+**Validation commands and results** (Windows; wheels freshly built with
+`python -m build --wheel` for core, documents, databases, llm and ui, installed
+by explicit path into clean `uv venv --seed` environments):
+
+- **Profile A, Python 3.11.15**, mirrors the CI main job, installing
+  `pytest mongomock` plus the core, documents and llm wheels and
+  `dataindex_ext_databases-0.1.0-py3-none-any.whl[duckdb,postgresql,mongodb]`:
+  - `pip check` was clean. The databases tests gave 385 passed and 9 skipped:
+    the six live tests, plus the Snowflake, BigQuery and ClickHouse compile
+    cases, which need their extras.
+  - The databases example ran. The documents tests gave 134 passed and 9
+    skipped (no PDF extra), and the mixed-sources example ran.
+  - The integration tests gave 181 passed, 1 failed and 3 skipped. The failure
+    was the new message assertion running against the core wheel built before
+    the label fix; it passes after the rebuild (see profile B).
+  - After uninstalling duckdb, SQLAlchemy, psycopg, pymongo and mongomock,
+    `pip check` was clean, the databases tests gave 366 passed and 28 skipped,
+    the integration tests gave 164 passed and 21 skipped, and the example ran.
+  - After uninstalling the databases wheel, the documents tests gave 134
+    passed and 9 skipped.
+  - After also uninstalling documents and llm, the core tests gave 1824
+    passed, `import dataindex` printed `0.1.0`, and `extensions list` printed
+    `No extensions discovered.`
+- **Profile B, Python 3.13.12**, installed `[all]` plus mongomock, the ui
+  wheel and httpx:
+  - `pip check` was clean. Resolved drivers: SQLAlchemy 2.1.8, duckdb 2.0.0,
+    psycopg 3.3.9, PyMySQL 1.2.4, cryptography 50.0.2, pyodbc 5.5.0,
+    oracledb 26.1.0, snowflake-sqlalchemy 2.1.0, sqlalchemy-bigquery 1.18.0,
+    clickhouse-connect 1.12.0 and pymongo 4.20.0.
+  - The databases tests gave 388 passed and 6 skipped (exactly the six live
+    tests). After the rebuilt core wheel, the integration tests gave 182
+    passed and 3 skipped (no pypdf; mock premium absent).
+  - The UI tests gave 24 passed. The core tests gave 1823 passed, with
+    `test_extensions_list_works_without_plugins` failing only because plugins
+    are installed; `release.yml` deselects it.
+- **Profile C, Python 3.12.13:** the core-only, no-extras, `[duckdb]` and
+  `[mongodb]` installs each passed `pip check`. The distributions and
+  missing-driver results are listed in the table above. A SQLite file still
+  submits with no extras.
+- **Profile D, Python 3.12.13**, mirrors `ui.yml` without the databases wheel:
+  the UI tests gave 24 passed and `dataindex-ui --version` ran.
+- `ruff check --isolated --select F` passed on the changed core module and the
+  new integration test. The repository has no linter configuration and CI runs
+  none.
+
+**CI changes:** in `.github/workflows/databases.yml`:
+- The main job installs `[duckdb,postgresql,mongodb]` with mongomock, and then
+  repeats the SQLite checks after removing every driver.
+- A new `database-servers` job starts PostgreSQL 16, MySQL 8.4, MariaDB 11.4,
+  SQL Server 2022, Oracle Free 23 and MongoDB 7 service containers. It runs the
+  live tests and **fails if any live test is skipped**.
+
+This job has never run. Its image tool paths (`sqlplus` and `/opt/mssql-tools18`)
+and the ODBC driver install step are unverified until it does.
+
+**Limitations and review items:**
+- Server sources are versioned by reflected schema plus approved queries, not
+  by row contents. Rows are read live, so answers can change between calls.
+- Local mode reflects the schema again on list, open and query, which costs a
+  server round trip each time.
+- BigQuery has a cost cap (`maximum_bytes_billed`) but no server-side statement
+  timeout.
+- The ClickHouse `max_execution_time` setting is applied only when the client
+  exposes it; whether it takes effect is unverified.
+- `mssql+pymssql` cannot set `ApplicationIntent=ReadOnly`.
+- psycopg (the `postgresql` extra) is LGPL-3.0-only; the SQL Server ODBC driver
+  is a separate Microsoft system package. Both are recorded in
+  `THIRD_PARTY_NOTICES.md`.
+- Plugin code still runs in-process and is not sandboxed. Use read-only logins.
+
+Stop here for human review; do not advance to another phase, publish or tag
+`v0.1.0`.
+
+## Phase 04 — Database views (2026-11-16)
+
+**Commit:** none; changes remain uncommitted. The user asked to "make the
+database extension to retrieve data from views, not only tables". This
+supersedes two statements in the Phase 04 acceptance record above:
+non-aggregate results may now also be ordered by every selected column instead
+of every joined table's primary key, and views are no longer excluded.
+
+**What changed** (details in
+[`packages/extensions/databases/README.md`](../packages/extensions/databases/README.md#views)):
+- Views can be allowlisted on every engine. Index records carry `object_kind`
+  (`table`, `view` or, for MongoDB, `collection`).
+- A row query must order by every joined table's primary key **or** by every
+  selected column. Views have no key, so their row queries use the second form.
+- **SQLite files:** each allowlisted view is compiled with `EXPLAIN` under a
+  recording authorizer at registration. At query time the authorizer allows,
+  inside each view, only the reads and functions recorded for that view. Views
+  over `sqlite_schema`, virtual tables or `pragma_*` functions are refused.
+- **DuckDB files:** view definitions are parsed with `json_serialize_sql` and
+  followed through nested views. They may read only `main`-schema tables and
+  views, and may call only built-in consistent scalar and aggregate functions
+  and built-in window functions. A block-list adds `current_setting`,
+  `getvariable`, `getenv`, `current_localtime` and `current_localtimestamp`,
+  which DuckDB marks consistent. Generated columns are checked by the same
+  rules. This also applies to allowlisted columns of plain tables, which is
+  new hardening for tables.
+- **MongoDB:** views are accepted; `_id` is not a key there, and the version
+  digest covers `viewOn` and `pipeline`.
+- **SQL servers** already reflected views and materialized views. The missing
+  object message now says "tables or views".
+- **DuckDB floor raised to 1.2:** DuckDB 1.1.x raises `BinderException` when a
+  `DATE` column is compared with a text filter value, so the shared contract
+  failed there. This predates the views work. `pyproject.toml` and
+  `constraints.txt` now require `duckdb>=1.2,<3`, and the main CI job runs
+  the DuckDB tests again on DuckDB 1.2.2.
+- The UI connect form and READMEs say "tables and views".
+
+| Acceptance criterion | Result | Evidence |
+|---|---|---|
+| Row and aggregate queries over views, including nested views | MET for SQLite, DuckDB, the SQLAlchemy path (SQLite stand-in) and MongoDB (mongomock with a simulated view); NOT RUN on real servers | SQLite and engine view tests; live view checks added to the `test_live_*` tests |
+| A view cannot read more than its definition allows | MET for SQLite (recorded authorizer) and DuckDB (parsed definition); on servers the login and the server's view rules decide (documented) | Refusal tests: `sqlite_schema`, `pragma_table_info`, FTS5; DuckDB `current_setting`, `now()`, `current_localtimestamp()`, `duckdb_settings()`, `range()`, `sqlite_master`, another catalog, a macro, a generated column via a view, `USING SAMPLE` |
+| Deterministic row order without a key | MET | Ordering by every selected column is required; the old error now names both options |
+| Redefined view detected | MET for SQLite, DuckDB and MongoDB; on SQL servers only column changes are detected (documented) | Redefinition and pipeline-change tests |
+| DuckDB rules hold across supported versions | MET on 1.2.2, 1.4.5, 1.5.6 and 2.0.0 | The 23 DuckDB tests pass on each |
+| SQLite views work without optional drivers | MET | No-driver profile below |
+
+**Validation commands and results** (Windows, Python 3.11.15, wheels freshly
+built with `python -m build --wheel` for core, documents, databases, llm and
+ui):
+- **With drivers:** installed with `pytest`, `mongomock`, `httpx` and
+  `dataindex_ext_databases-0.1.0-py3-none-any.whl[duckdb,postgresql,mongodb]`
+  (duckdb 2.0.0, SQLAlchemy 2.1.8). `pip check` was clean.
+  - Databases tests: 408 passed, 9 skipped. The skips are the six live tests
+    and the three Snowflake, BigQuery and ClickHouse compile cases.
+  - Integration tests: 182 passed, 3 skipped (no pypdf; mock premium absent).
+  - Documents tests: 134 passed, 9 skipped. UI tests: 24 passed.
+  - The databases example printed 150000 and 90000 USD cents, and
+    `examples/mixed_sources.py` ran.
+- **No drivers:** after uninstalling duckdb, SQLAlchemy, psycopg, pymongo and
+  mongomock, `pip check` was clean. Databases tests: 373 passed, 44 skipped,
+  with the SQLite view tests passing. Integration tests: 164 passed, 21
+  skipped. The example ran.
+- **DuckDB versions:** `test_database_engines.py -k duckdb` gave 23 passed on
+  each of duckdb 1.2.2, 1.4.5 and 1.5.6, run in a separate Python 3.11.15
+  environment. DuckDB 1.1.0 fails the pre-existing date-filter contract, as
+  described above.
+- `ruff check --isolated --select F` on the changed Python files reported only
+  F541 at `packages/extensions/databases/tests/test_databases_config.py:791`.
+  That finding is already present in the committed `HEAD`.
+
+**Limitations and review items:**
+- When rows differ only in values the column's collation treats as equal
+  (case or accents under an insensitive collation, `-0.0` and `0.0`), they can
+  be returned in either order.
+- A server view's SQL text is not part of the source version. The extension
+  cannot inspect what a server view runs or with whose privileges (for example
+  PostgreSQL views run with owner rights unless `security_invoker` is set).
+- The DuckDB function rule trusts DuckDB's stability marking plus a five-name
+  block-list. A future DuckDB function marked consistent that reads session
+  state would need adding.
+- DuckDB before 2.0 does not report which columns are generated. A table that
+  declares a generated column therefore has every column default checked, so
+  a default such as `now()` makes that table unsupported there.
+- MongoDB view filter values are not converted to declared types, because
+  views have no validator. mongomock has no views, so the test simulates one.
+- The live server and MongoDB view checks and the new DuckDB 1.2.2 CI step
+  have not run (no servers here; CI not run). `DROP VIEW IF EXISTS` in the
+  live fixtures needs SQL Server 2016 or later and Oracle 23ai.
+
+Stop here for human review; do not advance to another phase, publish or tag
+`v0.1.0`.

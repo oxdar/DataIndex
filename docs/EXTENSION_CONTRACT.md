@@ -106,7 +106,7 @@ Schemas are limited to 32 KiB and nesting depth 16.
 
 An extension may implement `SourceAwareToolProvider.tools_for_source(source)`
 in addition to `DataIndexExtension`. The dispatcher uses this to expose only
-source-specific operations; the SQLite extension, for example, enumerates
+source-specific operations; the databases extension, for example, enumerates
 approved query IDs for the registered database revision. Extensions without
 this optional protocol continue to use `tools()`.
 

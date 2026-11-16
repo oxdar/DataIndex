@@ -273,14 +273,14 @@ def test_get_section_rejects_unknown_nodes_bad_requests_and_deadlines() -> None:
 
 def test_probe_registration_and_clear_unsupported_format_errors() -> None:
     extension = DocumentIndexExtension()
-    unsupported = source("unknown", "application/pdf", "rev-pdf")
+    unsupported = source("unknown", "image/png", "rev-png")
 
     result = extension.probe(unsupported)
 
     assert not result.supported
     assert "unsupported" in result.reason
     with pytest.raises(UnsupportedDocumentFormatError, match="unsupported"):
-        extension.register_document(unsupported, b"%PDF-")
+        extension.register_document(unsupported, b"\x89PNG\r\n\x1a\n")
     with pytest.raises(DocumentNotRegisteredError):
         tuple(extension.iter_index_records(source(), IndexContext()))
     extension.close()

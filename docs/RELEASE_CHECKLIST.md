@@ -13,6 +13,7 @@ decisions remain open; do not publish or tag `v0.1.0`.
 - [ ] Free document extension builds and installs independently.
 - [ ] Free SQL extension builds and installs independently.
 - [ ] *Local mode:* `dataindex-llm` wheel/sdist builds and installs independently; core still imports and passes its own tests after it is removed; a model name without it fails at client creation with `ChatModelConfigurationError`.
+- [ ] *Local UI:* `dataindex-ui` wheel/sdist builds and installs independently; its suite passes on installed wheels (`.github/workflows/ui.yml`); it binds only to loopback; chat history survives a restart; a human has reviewed the page in a real browser.
 - [ ] Synthetic premium test wheel installs separately but cannot execute entitled tool without valid mock entitlement.
 - [ ] Core runs without network or model keys; `import dataindex` passes.
 - [ ] No runtime `pageindex`, vector DB or embedding deps.
@@ -26,13 +27,17 @@ decisions remain open; do not publish or tag `v0.1.0`.
 - [ ] Package matrix tests from `docs/ACCEPTANCE_CRITERIA.md` pass.
 - [ ] CI builds wheels and executes isolated installs/tests.
 - [ ] README quickstart and installation commands tested as written, including the local-mode Python and CLI examples.
-- [ ] *Local mode:* README states the differences from PageIndex (no PDF/OCR, streaming, cloud mode or MCP) and does not claim PyPI availability.
+- [ ] *Local mode:* README states the differences from PageIndex (no OCR, streaming, cloud mode or MCP; PDF needs an optional parser extra) and does not claim PyPI availability.
 - [ ] License decision for DataIndex code approved; all third-party notices included.
-- [ ] Package names verified for public publication (`dataindex-core`, the two extensions and `dataindex-llm`).
+- [ ] Package names verified for public publication (`dataindex-core`, the two extensions, `dataindex-llm` and `dataindex-ui`).
 - [ ] Tag `v0.1.0` only after gates pass, publish release notes without unsupported claims.
 
-The local-mode CLI (`submit`, `submit-db`, `documents`, `chat`) submits files and
-SQLite databases with approved typed queries. The older catalog CLI remains
-document-only and has no SQL query configuration command. Dependency/license
-audit, secret scan, SBOM/provenance, CI execution, package-name recheck and
-license approval are still release blockers.
+The local-mode CLI (`submit`, `submit-db`, `documents`, `chat`) submits files,
+SQLite and DuckDB database files, and database servers (by URL, with the
+password in an environment variable) with approved typed queries. The older
+catalog CLI remains document-only and has no SQL query configuration command.
+Dependency/license audit, secret scan, SBOM/provenance, CI execution,
+package-name recheck and license approval are still release blockers.
+PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB are not live-verified
+until the `database-servers` job in `.github/workflows/databases.yml` passes;
+Snowflake, BigQuery and ClickHouse have no live tests and stay experimental.
