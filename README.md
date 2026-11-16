@@ -377,8 +377,8 @@ options.
   - Hosted multi-user mode, process isolation for plugins, and an MCP server.
   - Production premium readers, and database engines not listed in the
     database guide.
-  - BIM/CAD, subsurface and geospatial formats, which are
-    [planned](docs/FUTURE_RELEASES.md) for later releases.
+  - BIM/CAD, subsurface and geospatial formats, which are planned for later
+    releases.
 - **Database server testing.** Live-server tests for PostgreSQL, MySQL,
   MariaDB, SQL Server, Oracle and MongoDB run in continuous integration. The
   experimental engines (Snowflake, BigQuery and ClickHouse) have no

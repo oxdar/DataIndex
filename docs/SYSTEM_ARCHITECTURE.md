@@ -1,8 +1,7 @@
 # DataIndex v0.1.0 — Greenfield architecture
 
-**Status:** Architecture proposal; the verified implementation progress is
-tracked by phase in [PHASE_STATUS.md](./PHASE_STATUS.md). See the
-[ADR set](./adr/ADR-001-open-core-plugins.md).
+**Status:** Architecture of the v0.1.0 pre-release. See the
+[ADR set](./adr/ADR-001-open-core-plugins.md) for the design decisions.
 
 ## Boundaries and responsibilities
 

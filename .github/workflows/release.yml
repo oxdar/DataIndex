@@ -8,8 +8,6 @@ on:
       - "examples/**"
       - "docs/**"
       - "**.md"
-      - ".github/copilot-instructions.md"
-      - ".github/instructions/**"
       - ".github/workflows/release.yml"
   pull_request:
     paths:
@@ -18,8 +16,6 @@ on:
       - "examples/**"
       - "docs/**"
       - "**.md"
-      - ".github/copilot-instructions.md"
-      - ".github/instructions/**"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 

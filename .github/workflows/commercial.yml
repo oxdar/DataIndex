@@ -13,7 +13,6 @@ on:
       - "docs/EXTENSION_CONTRACT.md"
       - "docs/SECURITY_AND_ENTITLEMENTS.md"
       - "docs/REPOSITORY_AND_PACKAGING.md"
-      - "docs/PHASE_STATUS.md"
   pull_request:
     paths:
       - "packages/core/**"
@@ -26,7 +25,6 @@ on:
       - "docs/EXTENSION_CONTRACT.md"
       - "docs/SECURITY_AND_ENTITLEMENTS.md"
       - "docs/REPOSITORY_AND_PACKAGING.md"
-      - "docs/PHASE_STATUS.md"
   workflow_dispatch:
 
 jobs:

@@ -1,9 +1,9 @@
 # Contributing
 
-DataIndex v0.1.0 is a greenfield, phase-gated implementation. Read
-`AGENTS.md`, `.github/copilot-instructions.md`, the scope, acceptance criteria,
-and the active phase plan before making changes. Implement one phase at a time
-and stop at its review gate.
+DataIndex v0.1.0 is a pre-release. Before starting a larger change, open an
+issue to discuss it, and keep each pull request focused on one change. Read
+[docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) and the
+[architecture decision records](docs/adr/) first.
 
 ## Development checks
 
@@ -17,7 +17,7 @@ Build each package independently with `python -m build --wheel --sdist
 --outdir <output-directory> <package-directory>`. Extension changes must be
 tested from built wheels in clean environments, including core-only and mixed
 install/removal checks. See `docs/REPOSITORY_AND_PACKAGING.md` for the required
-matrix and `docs/PHASE_STATUS.md` for actual evidence.
+matrix and the workflows in `.github/workflows` for the complete CI checks.
 
 Keep extension source, dependency and licensing boundaries intact. Never add
 arbitrary SQL, vector/embedding dependencies, proprietary implementation code,

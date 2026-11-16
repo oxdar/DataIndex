@@ -22,8 +22,28 @@ dist/
 !.env.example
 !.env.*.example
 .vscode/
+.idea/
+*.code-workspace
 .DS_Store
 Thumbs.db
+
+# Internal development material: AI-assistant instructions and prompts, and
+# phase planning, status and commercial roadmap documents. Kept locally only.
+/AGENTS.md
+/prompts/
+/.github/copilot-instructions.md
+/.github/instructions/
+/.github/prompts/
+/docs/phases/
+/docs/future/
+/docs/IMPLEMENTATION_PLAN.md
+/docs/PHASE_STATUS.md
+/docs/ACCEPTANCE_CRITERIA.md
+/docs/VERSION_0_1_SCOPE.md
+/docs/RELEASE_CHECKLIST.md
+/docs/VS_CODE_WORKFLOW.md
+/docs/EXTENSION_CATALOG.md
+/docs/FUTURE_RELEASES.md
 
 # Local catalogs, uploaded sources, chat history, and the README's sample database.
 dataindex.sqlite

@@ -13,7 +13,6 @@ on:
       - "README.md"
       - "docs/EXTENSION_CONTRACT.md"
       - "docs/SECURITY_AND_ENTITLEMENTS.md"
-      - "docs/PHASE_STATUS.md"
       - ".github/workflows/databases.yml"
   pull_request:
     paths:
@@ -27,7 +26,6 @@ on:
       - "README.md"
       - "docs/EXTENSION_CONTRACT.md"
       - "docs/SECURITY_AND_ENTITLEMENTS.md"
-      - "docs/PHASE_STATUS.md"
       - ".github/workflows/databases.yml"
   workflow_dispatch:
 

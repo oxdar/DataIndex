@@ -31,8 +31,7 @@ installs. Any other URL scheme is refused.
   `mongomock` for MongoDB), and a live contract test (`test_live_*`) runs
   against a real server in the `database-servers` CI job: PostgreSQL 16,
   MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle Database 23ai Free and
-  MongoDB 7. See `docs/PHASE_STATUS.md` in the repository for the latest
-  results.
+  MongoDB 7.
 - **experimental:** the URL rules, driver and guards are implemented, but
   nothing is tested against the real service. Check them with your own
   read-only account before relying on them.
