@@ -242,7 +242,8 @@ with DataIndexClient(chat="gpt-4o") as client:
 To build your own agent loop, use `as_openai_tools()`, `as_anthropic_tools()`,
 `agent_instructions()` and `call_tool()`. Host applications can call
 `DataIndexClient.open(...)` with explicit authorization and trust policies. The
-[core package guide](packages/core/README.md) describes the public surface.
+[Python API reference](packages/core/README.md#python-api-reference) covers the
+local and host APIs, return values, errors, chat models and agent tools.
 
 ## Databases
 
@@ -391,6 +392,7 @@ options.
 | [Model adapter](packages/llm/README.md) | OpenAI-compatible and LiteLLM backends |
 | [Browser UI](packages/ui/README.md) | Running the UI, storage and deletion |
 | [Core package](packages/core/README.md) | Python SDK, catalog, plugin runtime, authorization and CLI |
+| [Changelog](CHANGELOG.md) | Changes in this version |
 
 ## Contributing and support
 
