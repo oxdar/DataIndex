@@ -27,9 +27,12 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Internal material kept locally only: the docs and prompts folders, and
+# Internal material kept locally only: planning docs, prompts, and
 # AI-assistant instructions.
-/docs/
+/docs/*
+!/docs/EXTENSION_CONTRACT.md
+!/docs/SECURITY_AND_ENTITLEMENTS.md
+!/docs/SYSTEM_ARCHITECTURE.md
 /prompts/
 /AGENTS.md
 /.github/copilot-instructions.md

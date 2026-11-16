@@ -392,6 +392,9 @@ options.
 | [Model adapter](packages/llm/README.md) | OpenAI-compatible and LiteLLM backends |
 | [Browser UI](packages/ui/README.md) | Running the UI, storage and deletion |
 | [Core package](packages/core/README.md) | Python SDK, catalog, plugin runtime, authorization and CLI |
+| [Extension contract](docs/EXTENSION_CONTRACT.md) | Plugin packaging, manifest, lifecycle and protocol |
+| [Security and entitlements](docs/SECURITY_AND_ENTITLEMENTS.md) | Trust, source authorization, entitlement and data boundaries |
+| [System architecture](docs/SYSTEM_ARCHITECTURE.md) | Components, data flow and trust boundaries |
 | [Changelog](CHANGELOG.md) | Changes in this version |
 
 ## Contributing and support
