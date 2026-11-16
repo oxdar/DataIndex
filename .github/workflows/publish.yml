@@ -1,0 +1,83 @@
+name: Publish to PyPI
+
+# Uses PyPI Trusted Publishing (OIDC); no API tokens are stored in this repository.
+# Each distribution is its own PyPI project and has its own GitHub environment,
+# so register one trusted publisher per project with:
+#   Owner: oxdar   Repository: dataindex   Workflow: publish.yml
+#   Environment: pypi-<project>   (for example pypi-dataindex-core)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      index:
+        description: Package index to publish to
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: dataindex-core
+            path: packages/core
+          - project: dataindex-ext-documents
+            path: packages/extensions/documents
+          - project: dataindex-ext-databases
+            path: packages/extensions/databases
+          - project: dataindex-llm
+            path: packages/llm
+          - project: dataindex-ui
+            path: packages/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build --wheel --sdist --outdir dist "${{ matrix.path }}"
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.project }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - dataindex-core
+          - dataindex-ext-documents
+          - dataindex-ext-databases
+          - dataindex-llm
+          - dataindex-ui
+    environment:
+      name: pypi-${{ matrix.project }}
+      url: https://pypi.org/p/${{ matrix.project }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.project }}
+          path: dist/
+      - name: Publish ${{ matrix.project }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ inputs.index == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
