@@ -18,6 +18,12 @@ from Python, from the command line, or in an optional local browser chat.
 [Python API](#python-api) · [Databases](#databases) · [Browser chat](#browser-chat) ·
 [Privacy and limits](#privacy-security-and-limits) · [Documentation](#documentation)
 
+![Animated demo of the DataIndex browser chat: a Word document is uploaded, a PostgreSQL database is connected, and two questions are answered with expandable citations that show the source, version, operation and exact location.](assets/dataindex-ui-demo.gif)
+
+*The optional [browser chat](#browser-chat): upload a document, connect a
+database and ask questions. Each answer cites its source. The recording uses
+fictional sample data, a local PostgreSQL server and `gpt-4o-mini`.*
+
 ## Features
 
 - **No vectors.** Documents are indexed by their own structure: headings,
